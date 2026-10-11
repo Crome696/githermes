@@ -36,6 +36,21 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 - Hermes Desktop
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth status`)
 
+### Repository access
+
+The picker discovers all repositories accessible to the connected `gh` account:
+owned repositories, collaborator repositories, and repositories available through
+organization membership, including private repositories. It follows every page
+of GitHub's `GET /user/repos` API; there is no 30-repository discovery limit.
+Manual repository selection and the saved/session repository pins still work.
+
+GitHermes reuses the existing `gh` login and does not store another token or grant
+new GitHub permissions. For private repositories the credential must already have
+repository access (`repo` for a classic OAuth/PAT credential, or the appropriate
+repository selection and permissions for a fine-grained token). Organization
+OAuth restrictions, SAML SSO authorization and administrator approval still apply;
+this plugin cannot bypass them or expose repositories the account cannot access.
+
 ## Install
 
 ```bash

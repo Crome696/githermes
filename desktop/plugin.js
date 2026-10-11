@@ -1291,14 +1291,27 @@ function onChatLinkClick(event) {
   openGithubPane()
 }
 
+// gh repo list without an owner only discovers the personal account. The REST
+// endpoint includes owned, collaborator and organization-member repositories;
+// --paginate follows every page without the PR/comment list caps. Project just
+// names, then use the chunked transport so shell.exec's 4k limit cannot hide repos.
+export async function loadAccessibleRepos(run = shBig) {
+  const endpoint = 'user/repos?visibility=all&affiliation=owner,collaborator,organization_member&per_page=100&sort=full_name&direction=asc'
+  const out = await run(`${GH} api ${sq(endpoint)} --paginate --jq ${sq('.[].full_name')}`)
+  const names = String(out).split('\n').map(name => name.trim()).filter(Boolean)
+  if (names.some(name => !repoOk(name))) throw new Error('gh returned an invalid repository name')
+  const unique = new Map()
+  for (const name of names) {
+    const key = name.toLowerCase()
+    if (!unique.has(key)) unique.set(key, name)
+  }
+  return [...unique.values()].sort()
+}
+
 function useRepos() {
   return useQuery({
     queryKey: [ID, 'repos'],
-    queryFn: async () => {
-      const repos = await shJson(`${GH} repo list --limit 30 --json nameWithOwner`)
-      if (!Array.isArray(repos)) throw new Error('gh repo list failed')
-      return repos.map(r => r.nameWithOwner).sort()
-    },
+    queryFn: () => loadAccessibleRepos(),
     staleTime: 60_000,
   })
 }
