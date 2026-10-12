@@ -1,5 +1,7 @@
 # GitHermes
 
+GitHermes **0.6.0** — [Crome696/githermes](https://github.com/Crome696/githermes).
+
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
 > **Community plugin.** GitHermes is an open-source, independent project. It is **not** an official Nous Research product and is not developed or maintained by the Hermes team. It works with Hermes Desktop through its public plugin API.
@@ -33,7 +35,7 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 
 ## Requirements
 
-- Hermes Desktop
+- Hermes Desktop 0.21.7 or newer (audited SDK floor; see verification limits below)
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth status`)
 
 ### Repository access
@@ -54,7 +56,7 @@ this plugin cannot bypass them or expose repositories the account cannot access.
 ## Install
 
 ```bash
-hermes plugins install claudiumio/githermes --enable
+hermes plugins install Crome696/githermes --enable
 ```
 
 Or manually: drop this folder into `~/.hermes/plugins/githermes/` (unified package — the desktop half lives at `desktop/plugin.js`), or copy `desktop/plugin.js` to `~/.hermes/desktop-plugins/githermes/plugin.js` (standalone disk door). The app hot-reloads on save.
@@ -68,7 +70,41 @@ The plugin **id** changed (`github-prs` → `githermes`), so the old install mus
 - Disk plugins load **uncompiled**: UI is written with `jsx()`/`jsxs()` calls, no JSX syntax, no build step.
 - Only `@hermes/plugin-sdk`, `react`, and `react/jsx-runtime` are importable.
 - Tailwind classes must already exist in the app's compiled CSS — arbitrary `var()` bracket forms (`bg-[var(--x)]`) are silently dead at runtime. Use the paren shorthand (`text-(--ui-text-tertiary)`) or scoped `<style>` blocks with real theme variables.
-- Large `gh` payloads go through `shBig` / `shJsonBig` (base64 chunks under the gateway stdout cap). Lists are capped at 30 rows by design.
+- Large `gh` payloads go through `shBig` / `shJsonBig` (lowercase **hex**, not base64, in 3,800-character chunks under the 4,000-character gateway stdout cap). Lists start at 30 rows and grow on demand up to 120; repository discovery is paginated without that list cap.
+
+### Hermes 0.21.7 compatibility audit
+
+The audit targets **v0.21.7+9**, upstream commit
+[`41cd7b649d0980c57620035af736f91be10dae79`](https://github.com/NousResearch/hermes-agent/commit/41cd7b649d0980c57620035af736f91be10dae79).
+The authoritative [Desktop SDK guide](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk)
+and the source at that commit were checked, not a local Hermes source checkout.
+
+| Boundary | Finding |
+| --- | --- |
+| Release history | Official tags/releases expose v0.21.6 and v0.21.7, but no exact v0.21.1–v0.21.5 tags/releases. Both patch notes defer full curated notes to v0.22.0; missing notes are not evidence of no changes. v0.21.6 mentions isolated backend plugins and unified settings; v0.21.7 mentions new additive SDK actions/pet APIs. |
+| Desktop loader/imports | `contrib/runtime-loader.ts` and `sdk/runtime.ts` still rewrite SDK/React imports to live ESM shims. Every GitHermes named SDK import exists at the audited commit. Unified `plugins/<id>/desktop/plugin.js` and standalone `desktop-plugins/<id>/plugin.js` remain supported; unified packages inventory disabled until enabled. No production import migration was indicated. |
+| Manifest | `hermes_cli/plugins_manifest.py` retains v1 support; v2 is additive, not required here. `manifest_version: 1` stays. `requires_hermes: >=0.21.7` is the conservative **audited contract floor**, not proof that earlier versions fail or that a live Desktop minimum was exercised. |
+| Pane/workspace | `host.openWorkspace(id, {dock, minWidth, render, title, onClose})` returns a close disposer. IDs remain `plugin-workspace:<id>`; visibility/reveal/undismiss and `ctx.onDispose` still match the existing pane lifecycle. `TITLEBAR_AREAS` is an object with `titleBar.left/center/right`, not a string; the old Node adapter allowed undefined registration areas in tests. |
+| Storage | `ctx.storage.get(key, fallback)` is synchronous JSON persistence under `hermes.plugin.<id>.`; `set`/`remove` remain available. Repository, order and assignment keys remain unchanged. The existing pane-open localStorage key is preserved. |
+| Shell/output | `tui_gateway/methods_tools.py` still returns `{stdout, stderr, code}`, redacts output and keeps the last 4,000 stdout characters. Hex chunking remains necessary; base64 is only used to carry Windows command text into Git Bash. Windows missing-Bash retry improvements are separate follow-up scope. |
+| Theme/CSS | All referenced `--ui-*` tokens exist in upstream `styles.css`/theme presets, including editor-surface and diff colors. The existing scoped CSS stays unchanged. Source token presence does **not** prove a disk plugin's utility classes are included in the shipped CSS or visually correct in light/dark matte/glass. |
+
+### Tests and verification limits
+
+Run `npm test` on a fresh clone: `pretest` creates repository-local, gitignored
+SDK/React adapters. They model the correct bar slots, observable atoms, lazy
+React state and required host state; an unconfigured RPC fails instead of
+silently returning success. They are **not** Hermes Desktop or a React renderer.
+The Windows baseline also exposed a CRLF-sensitive source assertion; the test
+now accepts both LF and CRLF without weakening its row-action checks.
+
+Deterministic registration/storage/pane and capped-output transport tests do
+not establish live host installation or console cleanliness. Remaining live
+acceptance: CLI and manual installation into an isolated Desktop data root,
+open/dock/picker/list/detail interactions, an authorized disposable PR merge,
+and light/dark × matte/glass on actual Desktop. Linux/macOS live execution is
+also not claimed. No user plugin/profile, GitHub issue, or PR is changed by the
+test suite.
 
 ## Status & contributing
 
