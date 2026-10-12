@@ -109,7 +109,8 @@ test('Issue #31: pane and page wire the shared list keyboard flow', () => {
 
 test('Issue #30: list filter tokens keep row and token actions separate', () => {
   const lists = source.slice(source.indexOf('function PrList'), source.indexOf('function DetailToolbar'))
-  assert.equal((lists.match(/jsxs\('div', \{\r?\n\s+onClick: \(\) => onOpen\(/g) || []).length, 2)
+  assert.equal((lists.match(/jsxs\('div', \{\r?\n\s+onClick: \(\) =>/g) || []).length, 2)
+  assert.ok(lists.includes('if (issueDetailAllowed($issueQueue.get())) onOpen(it.number)'))
   assert.equal((lists.match(/className: 'gh-row-open/g) || []).length, 2)
   assert.ok(lists.includes("setListFilter(event, 'author', pr.author?.login)"))
   assert.ok(lists.includes("setListFilter(event, 'label', l.name)"))

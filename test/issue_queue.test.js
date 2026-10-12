@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { emptyIssueQueue, updateIssueQueue, restoreIssueQueues, persistIssueQueue, startIssueQueue, QUEUE_START_BLOCKER } from '../desktop/plugin.js'
+import { emptyIssueQueue, updateIssueQueue, restoreIssueQueues, persistIssueQueue } from '../desktop/plugin.js'
 const repo = 'octocat/Hello-World'
 const item = number => ({ repo, number, title: `Issue ${number}`, state: 'OPEN', labels: [{ name: 'bug', color: 'ff0000' }], assignees: [{ login: 'octocat' }] })
 const selected = () => [5, 2, 9].reduce((d, n) => updateIssueQueue(d, { type: 'toggle', item: item(n) }), emptyIssueQueue(repo))
@@ -48,7 +48,7 @@ test('defaults never approve merge; policy controls are validated draft preferen
  for (const options of [{ strategy: 'admin' }, { autoMerge: 'true' }, { onError: 'ignore' }, { target: 'shell' }, { assignee: '$(id)' }, { profile: null }, { toString: 'bad' }, JSON.parse('{"__proto__":{}}'), []]) assert.throws(() => updateIssueQueue(d, { type: 'options', options }))
 })
 test('real disk serialization restores order/options in a fresh module and isolates another repo', async () => {
- const artifacts = fileURLToPath(new URL('../../../artifacts/githermes-issues-2-3-4/', import.meta.url))
+ const artifacts = fileURLToPath(new URL('../../../artifacts/githermes-queue-goal-followup/', import.meta.url))
  mkdirSync(artifacts, { recursive: true })
  const dir = mkdtempSync(join(artifacts, 'issue-5-storage-'))
  try {
@@ -80,23 +80,15 @@ test('corrupt persisted drafts, duplicate issues and fabricated running state ar
  assert.equal(restoreIssueQueues({ [repo]: raw })[repo].items[0].status, 'draft')
  assert.equal(restoreIssueQueues({ [repo]: raw })[repo].items[0].goalId, undefined)
 })
-test('start and retry attempts fail closed regardless of checks, consent or error policy, with no RPC', () => {
- let calls = 0
- const host = { request: () => { calls++; throw new Error('external writes forbidden') } }
- for (const onError of ['stop', 'skip']) for (const autoMerge of [false, true]) for (const checks of ['green', 'red', 'pending', 'missing']) {
-  const d = updateIssueQueue(selected(), { type: 'options', options: { onError, autoMerge } })
-  for (let retry = 0; retry < 2; retry++) assert.throws(() => startIssueQueue(host, d, { checks, protection: true, approved: autoMerge }), { message: QUEUE_START_BLOCKER })
-  assert.deepEqual(numbers(d), [5, 2, 9]); assert.equal(d.status, 'draft')
- }
- assert.equal(calls, 0)
-})
-test('mounted production wiring keeps aggregate scope separate and explains disabled start', () => {
+test('production wiring shares a global queue and guards all issue row paths', () => {
  const s = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
  assert.match(s, /labels,assignees`/)
- assert.match(s, /'aria-label': `Select issue #\$\{it.number\}`/)
+ assert.match(s, /Issue \$\{repo\}#\$\{it.number\} auswählen/)
+ assert.match(s, /Issue \$\{item.repo\}#\$\{item.number\} auswählen/)
  assert.match(s, /onClick: e => e.stopPropagation\(\)/)
  assert.match(s, /onDragStart:.*setDragging/); assert.match(s, /onDrop:.*type: 'move'/)
- assert.match(s, /button\(`Move #\$\{item.number\} up`/)
- assert.match(s, /disabled: true, 'aria-describedby': 'queue-start-blocker'/)
- assert.match(s, /\$issueQueues.set\(restoreIssueQueues/)
+ assert.match(s, /issueDetailAllowed\(\$issueQueue.get\(\)\)/)
+ assert.match(s, /\$issueQueue.set\(restoreGlobalIssueQueue/)
+ assert.match(s, /children:.*'Goal erstellen'/)
+ assert.ok(!s.includes('QUEUE_START_BLOCKER'))
 })

@@ -93,43 +93,72 @@ repository selection and permissions for a fine-grained token). Organization
 OAuth restrictions, SAML SSO authorization and administrator approval still apply;
 this plugin cannot bypass them or expose repositories the account cannot access.
 
-## Issue queue drafts (execution blocked)
+## Cross-repository issue queue and persistent Goal
 
-In a **single repository's Issues list**, select open issues using their
-checkboxes and open **Mehrfach zuweisen**. The queue preserves selection order,
-shows titles/numbers/labels/current assignees, and supports drag-and-drop,
-keyboard-accessible Up/Down buttons and removal. Each repository has its own
-locally persisted draft, restored when the plugin reloads. Filtering the list
-or switching repositories does not discard the draft.
+Select open issues in **any individual or combined Issues list**. One shared
+queue preserves selection order across repositories, owners, scopes and filters.
+Identity is case-insensitive `owner/repo#number`, so equal issue numbers from
+different repositories remain distinct. The queue displays repository, title,
+labels and current GitHub assignees. Reorder with Up/Down buttons or drag handlers,
+and remove items individually. Existing version-1 repository drafts migrate
+without deleting their original storage; malformed data is not executable.
 
-Choose a GitHub assignee (defaults to the authenticated user), or a Hermes Agent
-profile plus its GitHub assignee, and prepare squash/merge/rebase and stop/skip
-preferences. **Auto-merge is off by default** and requires an explicit choice
-for this queue; that consent resets after restarting Hermes. These are draft
-preferences, not running automation. Clear queue draft removes the local draft;
-it does not cancel an agent or undo any GitHub assignment.
+While any issue is selected, issue-detail navigation is blocked for row, title,
+chevron and keyboard activation. **Auswahl aufheben** explicitly exits selection
+mode; checkboxes, removal and ordering remain available. The selection is saved
+locally before the UI publishes a change, so a storage failure keeps the prior
+saved selection. The draft is restored after reload.
 
-**Goal starten is disabled.** No assignees are changed, session created, prompt
-submitted, PR opened or merge executed by this queue UI. The official native
-`/goal` command creates a real persistent *session* goal through
-`command.dispatch`, stored in `SessionDB.state_meta`. Its completion contracts,
-subgoals and shell quality gates do not expose a structured issue cursor or an
-authoritative per-issue runner. A text objective is not proof of strict
-read/analyze/refine/implement/validate/PR/merge sequencing, restart-safe retries,
-or per-merge approval/check/protection enforcement. The UI therefore does not
-invent running progress or expose nonfunctional Pause/Resume/Retry controls.
+Choose a **Profil** (the current/default profile also works without a named bot),
+inspect **Goal-Prompt vor Erstellung ansehen**, then click **Goal erstellen**.
+That explicit action creates a separate profiled session, sets its title, and
+calls the real native `command.dispatch` `/goal -- <objective>` contract. Native
+Goals persist in the owning profile's `SessionDB.state_meta`. GitHermes verifies
+`/goal show` against the native normalized objective, then submits the returned
+`type: "send"` kickoff message through the audited session prompt API
+(`prompt.submit`, not an invented `session.submit` RPC). An `exec`-only creation
+response does not start model work. The new session opens in a tab and remains
+reachable through **Neue Session öffnen**.
 
-Full issue #5 execution requires a host-side runner with durable queue state,
-idempotent assignment/start, checked PR-head evidence, approval/protection gates,
-and atomic pause/resume/cancel/retry transitions. GitHermes has no backend; no
-undocumented Goals RPC or browser-owned runner is substituted. The audited
-contracts are Hermes `41cd7b649d0980c57620035af736f91be10dae79` and current upstream
-`2ddbd66ac6e511bbfe9acf696f67412c57685f63`, specifically
-`hermes_cli/goals.py`, `hermes_cli/goal_command.py` and
-`tui_gateway/methods_tools.py:_cmd_goal`. See the official
-[Persistent Goals documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/goals/).
-This feature is **queue preparation only, not a completed sequential Goal**.
-The existing audited Windows Git Bash transport is retained.
+“Assigned to a profile” means GitHermes's existing internal BotAssignment mapping
+for every selected issue, linked to this session. It **does not** add a GitHub
+assignee named after the local profile, or perform a GitHub assignment mutation.
+The mapping is saved only after Goal verification and an accepted kickoff.
+
+The numbered prompt requests issue/comments review, code analysis, clarified
+acceptance criteria, implementation, real checks, and a separate PR with a
+`Closes owner/repo#N` reference per issue. It asks Hermes to stop for review or
+required approval before advancing. **Auto-merge defaults to off**; only explicit
+opt-in for the current queue adds conditional merge instructions. Required
+profile approvals, current-head checks and branch protection still apply. Draft
+merge consent resets after reload. Metadata is untrusted JSON data, with line
+separators escaped so titles cannot inject native completion-contract fields.
+A known matching cwd is supplied only for a single-repository queue; cross-repo
+work must locate and verify each checkout and remote inside the user's allowlist.
+
+The native Goal is persistent; **the issue sequence is model-directed**, not an
+atomic native issue executor or a guarantee of CI/merge ordering. Inspect actual
+work in the new session and use native `/goal status`, `/goal pause`, `/goal resume`
+or `/goal clear` there. Clearing selection does not cancel an existing Goal.
+There is no fabricated per-issue running/merged progress in this panel.
+
+A shared in-flight guard and durable submission receipt prevent duplicate starts
+from repeated clicks. Known-session retries resume the same stored session;
+a lost Goal reply is reconciled with show/resume rather than blindly replacing
+it. Assignment-storage retries do not resend the kickoff. Unknown create or
+kickoff outcomes (for example a transport timeout) require checking the existing
+session instead of risking a duplicate. Hermes's create idempotency key is also
+supplied, but its gateway-memory lifetime is not a durable restart guarantee.
+
+Contracts were audited at Hermes `41cd7b649d0980c57620035af736f91be10dae79`
+(and Goal sources at `2ddbd66ac6e511bbfe9acf696f67412c57685f63`). An isolated
+probe executes the exact upstream command handler and GoalManager with real
+SessionDB, verifies profile-owned state and restores it in a fresh process.
+Mullvad light/dark production-component flows use synthetic host RPCs; no active
+profile Goals, model calls or GitHub mutations are used by verification. Native
+Desktop loading and user-run model work remain separate acceptance boundaries.
+See the official [Persistent Goals documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/goals/).
+The existing Windows Git Bash transport is retained.
 
 ## Combined user / organization view
 
