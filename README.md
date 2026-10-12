@@ -93,6 +93,44 @@ repository selection and permissions for a fine-grained token). Organization
 OAuth restrictions, SAML SSO authorization and administrator approval still apply;
 this plugin cannot bypass them or expose repositories the account cannot access.
 
+## Issue queue drafts (execution blocked)
+
+In a **single repository's Issues list**, select open issues using their
+checkboxes and open **Mehrfach zuweisen**. The queue preserves selection order,
+shows titles/numbers/labels/current assignees, and supports drag-and-drop,
+keyboard-accessible Up/Down buttons and removal. Each repository has its own
+locally persisted draft, restored when the plugin reloads. Filtering the list
+or switching repositories does not discard the draft.
+
+Choose a GitHub assignee (defaults to the authenticated user), or a Hermes Agent
+profile plus its GitHub assignee, and prepare squash/merge/rebase and stop/skip
+preferences. **Auto-merge is off by default** and requires an explicit choice
+for this queue; that consent resets after restarting Hermes. These are draft
+preferences, not running automation. Clear queue draft removes the local draft;
+it does not cancel an agent or undo any GitHub assignment.
+
+**Goal starten is disabled.** No assignees are changed, session created, prompt
+submitted, PR opened or merge executed by this queue UI. The official native
+`/goal` command creates a real persistent *session* goal through
+`command.dispatch`, stored in `SessionDB.state_meta`. Its completion contracts,
+subgoals and shell quality gates do not expose a structured issue cursor or an
+authoritative per-issue runner. A text objective is not proof of strict
+read/analyze/refine/implement/validate/PR/merge sequencing, restart-safe retries,
+or per-merge approval/check/protection enforcement. The UI therefore does not
+invent running progress or expose nonfunctional Pause/Resume/Retry controls.
+
+Full issue #5 execution requires a host-side runner with durable queue state,
+idempotent assignment/start, checked PR-head evidence, approval/protection gates,
+and atomic pause/resume/cancel/retry transitions. GitHermes has no backend; no
+undocumented Goals RPC or browser-owned runner is substituted. The audited
+contracts are Hermes `41cd7b649d0980c57620035af736f91be10dae79` and current upstream
+`2ddbd66ac6e511bbfe9acf696f67412c57685f63`, specifically
+`hermes_cli/goals.py`, `hermes_cli/goal_command.py` and
+`tui_gateway/methods_tools.py:_cmd_goal`. See the official
+[Persistent Goals documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/goals/).
+This feature is **queue preparation only, not a completed sequential Goal**.
+The existing audited Windows Git Bash transport is retained.
+
 ## Combined user / organization view
 
 The repository picker starts with **Alle meine Repos**, followed by **Alle in

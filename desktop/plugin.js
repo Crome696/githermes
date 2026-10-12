@@ -86,6 +86,79 @@ const PAGINATED_PAGE_CAP = 5
 let pluginCtx = null
 const $alwaysVisible = atom(true)
 const $botAssignments = atom({})
+const $issueQueues = atom({})
+
+// Drafts are not goals. The audited /goal RPC has no durable typed issue runner
+// or per-merge authorization barrier. Never submit a prompt as a substitute.
+export const QUEUE_START_BLOCKER = 'Goal start unavailable: Hermes exposes session goals, but no durable issue-queue runner with verified merge and approval barriers. No GitHub assignees were changed and no Goal was created.'
+const QUEUE_DEFAULTS = Object.freeze({ target: 'user', assignee: '', profile: '', strategy: 'squash', autoMerge: false, onError: 'stop' })
+const QUEUE_REPO = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/
+const QUEUE_LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/
+export function emptyIssueQueue(repo) {
+  if (!QUEUE_REPO.test(repo || '')) throw new Error('Queue requires one owner/repository')
+  return { version: 1, repo, items: [], options: { ...QUEUE_DEFAULTS }, status: 'draft' }
+}
+function queueItem(item, repo) {
+  if (item.repo && item.repo.toLowerCase() !== repo.toLowerCase()) throw new Error('Cross-repository queues are not supported')
+  if (!Number.isSafeInteger(item.number) || item.number < 1 || typeof item.title !== 'string') throw new Error('Invalid queue issue')
+  if (item.state && item.state.toUpperCase() !== 'OPEN') throw new Error('Only open issues can be queued')
+  return { number: item.number, title: item.title, labels: (Array.isArray(item.labels) ? item.labels : []).map(l => ({ name: String(l.name || ''), color: String(l.color || '') })), assignees: (Array.isArray(item.assignees) ? item.assignees : []).map(a => ({ login: String(a.login || '') })), status: 'draft' }
+}
+export function updateIssueQueue(draft, action) {
+  const next = { ...draft, items: draft.items.slice(), options: { ...draft.options }, status: 'draft' }
+  if (action.type === 'toggle') {
+    const item = queueItem(action.item, draft.repo)
+    const index = next.items.findIndex(i => i.number === action.item.number)
+    if (index >= 0) next.items.splice(index, 1)
+    else {
+      if (next.items.length >= 100) throw new Error('Queue is limited to 100 issues')
+      next.items.push(item)
+    }
+  } else if (action.type === 'move') {
+    const from = next.items.findIndex(i => i.number === action.number)
+    if (from < 0 || !Number.isInteger(action.to) || action.to < 0 || action.to >= next.items.length) throw new Error('Invalid queue position')
+    next.items.splice(action.to, 0, next.items.splice(from, 1)[0])
+  } else if (action.type === 'remove') next.items = next.items.filter(i => i.number !== action.number)
+  else if (action.type === 'clear') return emptyIssueQueue(draft.repo)
+  else if (action.type === 'options') {
+    const o = action.options
+    if (!o || typeof o !== 'object' || Array.isArray(o) || Object.keys(o).some(k => !Object.hasOwn(QUEUE_DEFAULTS, k))) throw new Error('Invalid queue options')
+    Object.assign(next.options, o)
+    const n = next.options
+    if (!['user', 'agent'].includes(n.target) || !['squash', 'merge', 'rebase'].includes(n.strategy) || !['stop', 'skip'].includes(n.onError) || typeof n.autoMerge !== 'boolean' || typeof n.profile !== 'string' || typeof n.assignee !== 'string' || (n.assignee && !QUEUE_LOGIN.test(n.assignee))) throw new Error('Invalid queue options')
+  } else throw new Error('Unsupported queue action')
+  return next
+}
+export function restoreIssueQueues(value) {
+  const result = {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result
+  for (const [repo, raw] of Object.entries(value)) {
+    try {
+      if (raw?.version !== 1 || raw.repo !== repo || raw.status !== 'draft' || !Array.isArray(raw.items) || raw.items.length > 100) continue
+      let draft = emptyIssueQueue(repo)
+      const seen = new Set()
+      for (const item of raw.items) {
+        if (seen.has(item.number)) throw new Error('Duplicate queue issue')
+        seen.add(item.number)
+        draft.items.push(queueItem(item, repo))
+      }
+      draft = updateIssueQueue(draft, { type: 'options', options: raw.options })
+      // A saved preference is not renewed permission after restarting Hermes.
+      draft.options.autoMerge = false
+      result[repo] = draft
+    } catch { /* Invalid persisted data never becomes an executable queue. */ }
+  }
+  return result
+}
+export function persistIssueQueue(storage, queues, draft) {
+  const next = { ...queues, [draft.repo]: draft }
+  storage.set('issueQueues', next) // Persist before publishing UI state; surface write failures.
+  return next
+}
+export function startIssueQueue() {
+  // No host/GitHub call, even if a caller bypasses the disabled UI button.
+  throw new Error(QUEUE_START_BLOCKER)
+}
 
 // Scoped wrap fix. Radix ScrollArea wraps children in a display:table div
 // (content-measuring hack) that lets content grow wider than the pane instead of
@@ -898,7 +971,7 @@ async function fetchPrByNumber(repo, n) {
 }
 
 async function fetchIssueByNumber(repo, n) {
-  return shJsonBig(`${GH} issue view ${sq(String(n))} --repo ${sq(repo)} --json number,title,state,author,updatedAt,url,labels`)
+  return shJsonBig(`${GH} issue view ${sq(String(n))} --repo ${sq(repo)} --json number,title,state,author,updatedAt,url,labels,assignees`)
 }
 
 async function shJsonLoose(cmd) {
@@ -3209,8 +3282,72 @@ function PrList({ repo, onOpen, query, active = true }) {
   })
 }
 
+function IssueQueueEditor({ repo, draft, change, error, onClose }) {
+  const [dragging, setDragging] = useState(null)
+  const viewer = useQuery({ queryKey: [ID, 'queue-viewer'], queryFn: () => sh(`${GH} api user --jq .login`), staleTime: 60_000 })
+  const bots = useQuery({ queryKey: [ID, 'bots'], queryFn: async () => listAssignableBots(await host.request('profiles.list', { include_sessions: false })), staleTime: 30_000 })
+  useEffect(() => {
+    const login = viewer.data?.trim()
+    if (!draft.options.assignee && QUEUE_LOGIN.test(login || '')) change({ type: 'options', options: { assignee: login } })
+  }, [viewer.data, draft.options.assignee])
+  const option = options => change({ type: 'options', options })
+  const control = { background: 'var(--ui-bg-editor)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', borderRadius: 6, padding: '4px 6px', maxWidth: '100%' }
+  const button = (label, onClick, disabled = false) => jsx(Button, { variant: 'outline', size: 'sm', disabled, onClick, 'aria-label': label, children: label })
+  return jsxs('section', { 'aria-label': 'Issue queue', className: 'p-3 border-b border-(--ui-stroke-secondary)', children: [
+    jsxs('div', { className: 'flex items-center gap-2', children: [jsx('h3', { className: 'text-xs font-semibold', children: `Queue · ${repo} · ${draft.items.length}` }), button('Close queue', onClose)] }),
+    jsx('p', { role: 'status', className: 'mt-2 text-xs text-(--ui-text-secondary)', children: 'Saved draft only — not running. Order and options are stored locally. Auto-merge consent resets after restart.' }),
+    jsx('ol', { className: 'mt-2', children: draft.items.map((item, index) => jsxs('li', {
+      draggable: true, 'data-queue-number': item.number, className: 'gh-list-row p-2',
+      onDragStart: e => { setDragging(item.number); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(item.number)) },
+      onDragEnd: () => setDragging(null), onDragOver: e => { if (dragging !== null) { e.preventDefault(); e.dataTransfer.dropEffect = 'move' } },
+      onDrop: e => { e.preventDefault(); if (dragging !== null) change({ type: 'move', number: dragging, to: index }); setDragging(null) },
+      children: [
+        jsx('div', { className: 'text-xs', children: `${index + 1}. #${item.number} ${item.title}` }),
+        jsxs('div', { className: 'mt-1 flex flex-wrap gap-1 text-[10px] text-(--ui-text-tertiary)', children: [
+          ...item.labels.map(label => jsx(LabelChip, { label }, label.name)),
+          jsx('span', { children: `Assignee: ${item.assignees.map(a => `@${a.login}`).join(', ') || 'none'} · Draft — not started` }),
+        ] }),
+        jsxs('div', { className: 'mt-1 flex flex-wrap gap-1', children: [
+          button(`Move #${item.number} up`, () => change({ type: 'move', number: item.number, to: index - 1 }), index === 0),
+          button(`Move #${item.number} down`, () => change({ type: 'move', number: item.number, to: index + 1 }), index === draft.items.length - 1),
+          button(`Remove #${item.number}`, () => change({ type: 'remove', number: item.number })),
+        ] }),
+      ],
+    }, item.number)) }),
+    jsxs('div', { className: 'mt-3 flex flex-wrap gap-2 text-xs', children: [
+      jsxs('label', { children: ['Assign to ', jsx('select', { 'aria-label': 'Queue target', style: control, value: draft.options.target, onChange: e => option({ target: e.target.value }), children: [jsx('option', { value: 'user', children: 'GitHub user' }), jsx('option', { value: 'agent', children: 'Hermes Agent' })] })] }),
+      draft.options.target === 'agent' ? jsxs('label', { children: ['Profile ', jsx('select', { 'aria-label': 'Hermes Agent profile', style: control, value: draft.options.profile, onChange: e => option({ profile: e.target.value }), children: [jsx('option', { value: '', children: bots.isLoading ? 'Loading profiles…' : 'Select profile' }), ...(bots.data || []).map(bot => jsx('option', { value: bot.name, children: bot.label }, bot.name))] })] }) : null,
+      jsxs('label', { children: ['GitHub assignee ', jsx('input', { 'aria-label': 'Queue GitHub assignee', style: control, value: draft.options.assignee, placeholder: viewer.isLoading ? 'Loading current user…' : 'GitHub login', onChange: e => option({ assignee: e.target.value }), autoComplete: 'off' })] }),
+      jsxs('label', { children: ['Merge strategy ', jsx('select', { 'aria-label': 'Queue merge strategy', style: control, value: draft.options.strategy, onChange: e => option({ strategy: e.target.value }), children: ['squash', 'merge', 'rebase'].map(s => jsx('option', { value: s, children: s }, s)) })] }),
+      jsxs('label', { children: ['On error ', jsx('select', { 'aria-label': 'Queue error policy', style: control, value: draft.options.onError, onChange: e => option({ onError: e.target.value }), children: [jsx('option', { value: 'stop', children: 'Stop and ask' }), jsx('option', { value: 'skip', children: 'Skip issue' })] })] }),
+      jsxs('label', { className: 'flex items-center gap-1', children: [jsx('input', { type: 'checkbox', 'aria-label': 'Auto-merge this queue', checked: draft.options.autoMerge, onChange: e => option({ autoMerge: e.target.checked }) }), 'Auto-merge this queue (explicit approval; green checks and branch protection still required)'] }),
+    ] }),
+    viewer.isError ? jsx('p', { className: 'mt-2 text-xs', children: 'Current GitHub user unavailable. Enter the assignee login explicitly.' }) : null,
+    bots.isError && draft.options.target === 'agent' ? jsx('p', { className: 'mt-2 text-xs', children: 'Hermes profiles unavailable. No agent was assigned.' }) : null,
+    jsx('p', { id: 'queue-start-blocker', className: 'mt-3 text-xs text-(--ui-yellow)', children: QUEUE_START_BLOCKER }),
+    error ? jsx('p', { role: 'alert', className: 'mt-2 text-xs text-(--ui-yellow)', children: error }) : null,
+    jsxs('div', { className: 'mt-2 flex flex-wrap gap-2', children: [
+      jsx(Button, { disabled: true, 'aria-describedby': 'queue-start-blocker', title: QUEUE_START_BLOCKER, size: 'sm', children: 'Goal starten — unavailable' }),
+      button('Clear queue draft', () => change({ type: 'clear' }), !draft.items.length),
+    ] }),
+  ] })
+}
+
 function IssueList({ repo, onOpen, query, active = true }) {
   const state = useValue($issueState)
+  const queues = useValue($issueQueues)
+  const draft = queues[repo] || (QUEUE_REPO.test(repo || '') ? emptyIssueQueue(repo) : null)
+  const [queueOpen, setQueueOpen] = useState(!!draft?.items.length)
+  const [queueError, setQueueError] = useState('')
+  const changeQueue = action => {
+    try {
+      if (!pluginCtx?.storage) throw new Error('Queue storage unavailable; draft was not saved')
+      const current = $issueQueues.get()
+      const next = updateIssueQueue(current[repo] || emptyIssueQueue(repo), action)
+      $issueQueues.set(persistIssueQueue(pluginCtx.storage, current, next))
+      setQueueError('')
+    } catch (error) { setQueueError(`Change not saved; previous draft kept. ${String(error.message || error)}`) }
+  }
   const [limit, setLimit] = useState(30)
   const q = useQuery({
     queryKey: [ID, 'issues', repo, state, limit],
@@ -3218,7 +3355,7 @@ function IssueList({ repo, onOpen, query, active = true }) {
     // Same key-growth hold as the PR list above.
     placeholderData: (prev) => prev,
     // Issue #10: same stdout-cap routing as the PR list (busy repos overflow).
-    queryFn: () => shJsonBig(`${GH} issue list --repo ${sq(repo)} --state ${sq(state)} --limit ${limit} --json number,title,state,author,updatedAt,url,labels`),
+    queryFn: () => shJsonBig(`${GH} issue list --repo ${sq(repo)} --state ${sq(state)} --limit ${limit} --json number,title,state,author,updatedAt,url,labels,assignees`),
     staleTime: 15_000,
     refetchInterval: MEDIUM_POLL_MS,
     refetchOnWindowFocus: true,
@@ -3236,11 +3373,11 @@ function IssueList({ repo, onOpen, query, active = true }) {
     staleTime: 15_000,
   })
   if (!repo) return jsx(EmptyState, { title: 'Select a repository', description: 'Pick one above to list issues.' })
-  if (q.isLoading) return jsx(ListSkeleton, {})
-  if (q.isError && !allItems.length) return jsx(ListErrorState, { title: 'Could not load issues', error: q.error, onRetry: () => q.refetch() })
+  if (q.isLoading && !draft?.items.length && !queueOpen) return jsx(ListSkeleton, {})
+  if (q.isError && !allItems.length && !draft?.items.length && !queueOpen) return jsx(ListErrorState, { title: 'Could not load issues', error: q.error, onRetry: () => q.refetch() })
   const source = lookup.data && lookupMatchesState(lookup.data, state, false) ? [lookup.data] : allItems
   const items = source.filter(item => matchesListQuery(item, query))
-  if (!items.length) {
+  if (!items.length && !draft?.items.length && !queueOpen) {
     const foot = ListMoreFooter({ q, limit, setLimit, allItems })
     return foot
       ? jsxs('div', { className: 'gh-list', children: [jsx(ListEmptyState, { kind: 'issues', state, repo, query: allItems.length ? query : '' }), foot] })
@@ -3251,10 +3388,14 @@ function IssueList({ repo, onOpen, query, active = true }) {
     children: jsx('div', {
       className: 'gh-list',
       children: [
+        queueOpen && draft ? jsx(IssueQueueEditor, { repo, draft, change: changeQueue, error: queueError, onClose: () => setQueueOpen(false) }) : null,
+        queueError && !queueOpen ? jsx('p', { role: 'alert', className: 'p-3 text-xs text-(--ui-yellow)', children: queueError }) : null,
+        q.isError ? jsx(ListErrorState, { title: 'Could not load issues; saved queue draft is still available', error: q.error, onRetry: () => q.refetch() }) : null,
         jsxs('div', { className: 'gh-list-heading flex items-center gap-1.5 px-1 py-0.5 text-[10px] font-semibold', children: [
           jsx(Codicon, { name: 'issues' }),
           jsx('span', { children: 'Issues' }),
           jsx('span', { className: 'font-normal text-(--ui-text-quaternary)', children: `Showing latest ${allItems.length}` }),
+          jsx(Button, { variant: 'outline', size: 'sm', disabled: !draft?.items.length, onClick: () => setQueueOpen(true), children: `Mehrfach zuweisen (${draft?.items.length || 0})` }),
           jsx(Badge, { variant: 'secondary', className: 'ml-auto h-5 min-w-5 justify-center text-[10px]', children: String(items.length) }),
         ] }),
         ...items.map(it =>
@@ -3262,6 +3403,7 @@ function IssueList({ repo, onOpen, query, active = true }) {
           onClick: () => onOpen(it.number),
           className: 'gh-list-row w-full text-left px-3 py-2.5 flex gap-2.5 items-start',
           children: [
+            jsx('input', { type: 'checkbox', 'aria-label': `Select issue #${it.number}`, checked: !!draft?.items.some(item => item.number === it.number), disabled: q.isPlaceholderData || it.state?.toUpperCase() !== 'OPEN', onClick: e => e.stopPropagation(), onChange: () => changeQueue({ type: 'toggle', item: { ...it, repo } }), className: 'mt-1 shrink-0' }),
             jsx('span', { className: 'mt-0.5', children: jsx(Avatar, { login: it.author?.login, size: 24 }) }),
             jsxs('span', {
               className: 'min-w-0 flex-1',
@@ -4174,6 +4316,7 @@ export default {
     ctx.onDispose?.(() => window.removeEventListener('click', onChatLinkClick, true))
     const assignments = ctx.storage.get('botAssignments', {})
     if (assignments && typeof assignments === 'object' && !Array.isArray(assignments)) $botAssignments.set(assignments)
+    $issueQueues.set(restoreIssueQueues(ctx.storage.get('issueQueues', {})))
 
     const paneWrap = () => jsxs('div', { className: 'githermes-pane h-full min-h-0 min-w-0 max-w-full overflow-hidden', children: [
       jsx('style', { children: PANE_WRAP_CSS }),
