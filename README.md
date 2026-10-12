@@ -125,19 +125,39 @@ for every selected issue, linked to this session. It **does not** add a GitHub
 assignee named after the local profile, or perform a GitHub assignment mutation.
 The mapping is saved only after Goal verification and an accepted kickoff.
 
-The numbered prompt requests issue/comments review, code analysis, clarified
-acceptance criteria, implementation, real checks, and a separate PR with a
-`Closes owner/repo#N` reference per issue. It asks Hermes to stop for review or
-required approval before advancing. **Auto-merge defaults to off**; only explicit
-opt-in for the current queue adds conditional merge instructions. Required
-profile approvals, current-head checks and branch protection still apply. Draft
-merge consent resets after reload. Metadata is untrusted JSON data, with line
-separators escaped so titles cannot inject native completion-contract fields.
+The live preview and submitted Goal use the same option-dependent plan. The
+numbered prompt requests issue/comments review, code analysis, implementation,
+real checks, and a separate PR with a `Closes owner/repo#N` reference per issue.
+
+- **Repository-Ausführung** defaults to sequential global selection order.
+  Parallel mode groups independent repository workers in first-seen repo order,
+  preserving issue order within each repo. Workers must check cross-repo
+  prerequisites and use separately verified checkouts or isolated worktrees.
+- **Refinement erlaubt** defaults to off: no issue-body writes; ask about unclear
+  requirements. Opt-in permits only acceptance-criteria/subtask clarification in
+  the issue body, without expanding scope or weakening gates. Preserve other
+  content, re-read before editing and verify the exact body after writing.
+- **Block on issue** defaults to on: an obstacle, unclear criteria or required
+  review/approval pauses the entire Goal. Off pauses the affected repo queue;
+  only independent repos in parallel mode may continue. Later issues in the
+  blocked repo and sequential global order cannot bypass the blocker.
+- **Bei Fehlern** remains separate: Stop halts the entire Goal on processing
+  errors; Skip permits only transparent skipping of non-blocking errors, never
+  failed required checks, unclear criteria or pending approval.
+- **Auto-merge defaults to off**; only explicit opt-in for the current queue adds
+  conditional merge instructions. Required profile approvals, current-head
+  checks and branch protection still apply. Merge consent resets after reload.
+
+Older drafts keep their items and existing options and receive the safe new
+defaults, with no accidental refinement permission. Explicit new preferences
+persist across reloads. Metadata is untrusted JSON data, with line separators
+escaped so titles cannot inject native completion-contract fields.
 A known matching cwd is supplied only for a single-repository queue; cross-repo
 work must locate and verify each checkout and remote inside the user's allowlist.
 
-The native Goal is persistent; **the issue sequence is model-directed**, not an
-atomic native issue executor or a guarantee of CI/merge ordering. Inspect actual
+The native Goal is persistent; **the issue sequence and repo workers are
+model-directed**, not an atomic native issue executor or a guarantee of parallel
+scheduling or CI/merge ordering. Inspect actual
 work in the new session and use native `/goal status`, `/goal pause`, `/goal resume`
 or `/goal clear` there. Clearing selection does not cancel an existing Goal.
 There is no fabricated per-issue running/merged progress in this panel.
