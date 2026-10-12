@@ -584,8 +584,11 @@ function sendCommentToChat(c) {
 // dropped because cmd.exe would swallow the binary name.
 //
 // `bash` on PATH is NOT safe to assume: Windows ships WSL's bash.exe in
-// System32, which would run the command against a different filesystem (and
-// no `gh`). Derive bash from the resolved `git` install instead.
+// System32, which would run against a different filesystem. Check all Git
+// installs, standard per-machine/per-user paths, then verified MSYS/MINGW
+// candidates from `where bash`. This is the plugin's cmd.exe adapter, NOT a
+// fallback for a host RPC that fails before executing our command. The audited
+// shell.exec accepts only command (no shell/executable/direct-process option).
 //
 // The command text itself never crosses `cmd.exe /c` (shell=True spawn): cmd parses
 // that string itself, so `|` `>` `&&` `^` are live operators, `%VAR%` expands, and
@@ -599,35 +602,50 @@ function sendCommentToChat(c) {
 let bashPath = null
 let bashReady = null
 
-/** Resolve Git for Windows' bash once. No-op on POSIX, where commands run as-is. */
+/** Share in-flight discovery and cache success only; a failed query can Retry. */
 function resolveBash() {
+  if (POSIX_SHELL || bashPath) return Promise.resolve()
   if (bashReady) return bashReady
   bashReady = (async () => {
-    if (POSIX_SHELL) return
-    try {
-      const r = await host.request('shell.exec', { command: 'where git' })
-      const git = (r.stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0]
-      if (!git) return
+    const lines = r => r.code === 0 ? (r.stdout || '').split('\n').map(s => s.trim()).filter(Boolean) : []
+    const candidates = []
+    const add = value => {
+      const path = value.replace(/\//g, '\\')
+      // Paths returned by a shell are data, not trusted cmd.exe syntax. Also
+      // never execute the Windows WSL shim even as a capability probe.
+      if (!/^[A-Za-z]:\\.*\\bash\.exe$/i.test(path) || /["%!*?&|<>^]/.test(path) || [...path].some(c => c.charCodeAt(0) < 32) || /\\(?:System32|SysWOW64)\\/i.test(path)) return
+      if (!candidates.some(p => p.toLowerCase() === path.toLowerCase())) candidates.push(path)
+    }
+    const r = await host.request('shell.exec', { command: 'where git' })
+    for (const git of lines(r)) {
       const normalizedGit = git.replace(/\\/g, '/')
-      // <root>/cmd/git.exe | <root>/mingw64/bin/git.exe -> <root>/bin/bash.exe
-      const m = normalizedGit.match(/^(.*)\/(?:cmd|mingw64\/bin|usr\/bin)\/[^/]+$/i)
-      const root = m ? m[1] : normalizedGit.replace(/\/[^/]+$/, '')
-      for (const candidate of [`${root}\\bin\\bash.exe`, `${root}\\usr\\bin\\bash.exe`]) {
-        const probe = await host.request('shell.exec', { command: `if exist "${candidate}" echo FOUND` })
-        if ((probe.stdout || '').includes('FOUND')) {
-          bashPath = candidate
-          break
-        }
+      // Git's cmd, bin, mingw64/bin and usr/bin layouts, including portable Git.
+      const m = normalizedGit.match(/^(.*)\/(?:cmd|bin|mingw64\/bin|usr\/bin)\/git\.exe$/i)
+      if (m) for (const dir of ['bin', 'usr/bin']) add(`${m[1]}/${dir}/bash.exe`)
+    }
+    // Expand only fixed host environment names; never interpolate where output
+    // into this command. Echo quoted paths and remove those quotes as data.
+    const defaults = await host.request('shell.exec', { command: 'for %G in ("%ProgramFiles%\\Git\\bin\\bash.exe" "%ProgramFiles%\\Git\\usr\\bin\\bash.exe" "%ProgramFiles(x86)%\\Git\\bin\\bash.exe" "%LOCALAPPDATA%\\Programs\\Git\\bin\\bash.exe" "%LOCALAPPDATA%\\Programs\\Git\\usr\\bin\\bash.exe") do @if exist "%~G" echo "%~G"' })
+    for (const path of lines(defaults)) add(path.replace(/^"(.*)"$/, '$1'))
+    const onPath = await host.request('shell.exec', { command: 'where bash' })
+    for (const path of lines(onPath)) add(path)
+    for (const candidate of candidates) {
+      const probe = await host.request('shell.exec', { command: `"${candidate}" -c "uname -s"` })
+      if (probe.code === 0 && /^(?:MINGW|MSYS)\S*/m.test((probe.stdout || '').trim())) {
+        bashPath = candidate
+        return
       }
-    } catch { /* shellCommand's bash-not-found stub is the recovery path */ }
-  })()
+    }
+    throw new Error('Git for Windows bash.exe was not found. Install Git for Windows or add its bin directory to the Hermes launch PATH, then Retry.')
+    // Rejected host RPCs deliberately propagate unchanged: they are not evidence
+    // that our discovery ran or that another command wrapper could fix the host.
+  })().finally(() => { bashReady = null })
   return bashReady
 }
 
 async function shellCommand(cmd) {
   await resolveBash()
   if (POSIX_SHELL) return cmd
-  if (!bashPath) return 'echo Git for Windows bash.exe was not found. Install Git for Windows and reopen this pane.&exit /b 9009'
   // Only base64 crosses cmd.exe (see the block comment above). Inside bash the
   // command is decoded into a $$-unique /tmp script, so concurrent shell.exec
   // calls share no file state, and `-l` is what makes `gh` resolve from the
@@ -957,10 +975,12 @@ export function issuePlan(repo, number, state) {
 // phrases first, generic last. Recovery commands are copy-only, never executed.
 export function classifyGhError(e) {
   const raw = String((e && e.message) || e || '')
-  if (/gh: command not found|command not found: gh|No such file or directory/i.test(raw) && /gh/.test(raw))
-    return { kind: 'missing', title: 'GitHub CLI not found', detail: 'Install the GitHub CLI (gh) and make sure it is on your PATH, then retry.' }
+  if (/Git for Windows bash\.exe was not found|No shell found.*Hermes needs bash|bash(?:\.exe)?: (?:command not found|No such file)|bash\.exe (?:was )?not found/i.test(raw))
+    return { kind: 'bash', title: 'Git for Windows Bash not found', detail: 'Install Git for Windows (https://gitforwindows.org/). GitHermes checks Program Files, LocalAppData Programs Git and PATH; for portable Git, add its bin directory to the PATH used to launch Hermes. Then Retry. If Hermes rejects shell.exec before running a command, repair the host shell first; the plugin cannot bypass it. Restart Hermes only if its inherited PATH changed.', command: 'where bash' }
+  if ((/command not found|No such file or directory|not recognized as an internal or external command/i.test(raw)) && /\bgh\b/i.test(raw))
+    return { kind: 'missing', title: 'GitHub CLI not found', detail: 'Install GitHub CLI (https://cli.github.com/) and put gh on the PATH used to launch Hermes. Check gh --version, then Retry. Restart Hermes only if its inherited PATH changed.', command: 'gh --version' }
   if (/not logged into any|gh auth login|authentication required|could not resolve to .* with the token|Bad credentials|HTTP 401/i.test(raw))
-    return { kind: 'auth', title: 'GitHub authentication needed', detail: 'Run gh auth login in your terminal to reconnect, then retry.', command: 'gh auth login' }
+    return { kind: 'auth', title: 'GitHub authentication needed', detail: 'Check gh auth status in your terminal. Run gh auth login if needed, then Retry. GitHermes uses that existing login.', command: 'gh auth status' }
   if (/rate limit|API rate limit|HTTP 403.*rate|exceeded.*quota/i.test(raw))
     return { kind: 'rate', title: 'GitHub rate limit reached', detail: 'Wait a few minutes for the quota to reset, then retry.' }
   if (/Could not resolve host|Failed to connect|Connection refused|Network is unreachable|HTTP 5\d\d|timeout|timed out|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(raw))
@@ -3837,7 +3857,7 @@ export default {
   register(ctx) {
     pluginCtx = ctx
     // Start the shared probe; shellCommand awaits it before any command runs.
-    resolveBash()
+    resolveBash().catch(() => {}) // The next query surfaces the error with Retry.
     const saved = ctx.storage.get('repo')
     if (saved) $repo.set(saved)
     interceptChatLinks = ctx.storage.get('interceptChatLinks', true) !== false

@@ -37,6 +37,46 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 
 - Hermes Desktop 0.21.7 or newer (audited SDK floor; see verification limits below)
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth status`)
+- **Windows:** [Git for Windows](https://gitforwindows.org/) (Git Bash and its POSIX tools), plus `gh` on the PATH inherited by Hermes. WSL's `C:\Windows\System32\bash.exe` is not a substitute.
+
+### Windows shell setup and recovery
+
+The SDK/gateway contract is audited against **Hermes Desktop v0.21.7+9**,
+commit `41cd7b649d0980`. Automated transport tests ran on Windows 11 through
+real `cmd.exe` → Git Bash; this is **not** a live Desktop-tested minimum.
+Linux/macOS Desktop loading and interactions remain unverified.
+
+GitHermes checks every `where git` result (including portable Git),
+`%ProgramFiles%\Git\bin\bash.exe` / `usr\bin\bash.exe`,
+`%ProgramFiles(x86)%\Git\bin\bash.exe`,
+`%LOCALAPPDATA%\Programs\Git\bin\bash.exe` / `usr\bin\bash.exe`,
+and `where bash`. Candidates must report a MINGW/MSYS environment; the Windows
+System32/SysWOW64 WSL shims are never invoked. Discovery failures are not cached:
+fix the installation and click **Retry** in the pane, without closing it.
+
+For a custom/portable installation, add Git's `bin` directory to the PATH used
+to **launch Hermes**. Check `where bash`, `gh --version` and `gh auth status`
+in that terminal; run `gh auth login` if authentication is missing. Recovery
+commands in the pane are copy-only, not automatic installers or login prompts.
+If you changed the parent process's PATH, restart Hermes once to inherit it;
+Retry cannot update an already running gateway's environment.
+
+**Host boundary:** at the audited commit, `shell.exec` consumes only `command`
+and uses Python `subprocess.run(..., shell=True)`: Windows `cmd.exe`, POSIX's
+system shell. It exposes no `shell`, `executable` or direct-process/argv option.
+The gateway does not use the terminal tool's Bash selector for this RPC, and
+there is no audited per-RPC Bash-path setting to recommend. If another host
+build rejects `shell.exec` *before executing the command*, GitHermes cannot
+repair that launcher with a command wrapper; repair the host shell installation
+or launch PATH and follow that build's host documentation, then Retry.
+No undocumented RPC option or host configuration is assumed here.
+
+The current large-output/comment transport still requires POSIX utilities,
+`/tmp`, pipelines and quoting. Hex chunks protect against the gateway's
+4,000-character stdout cap/redaction; base64 carries Windows command text
+safely through cmd.exe. Removing these without a documented shell-neutral
+transport would break large PRs/comments. Native cmd/PowerShell-only operation
+without Git Bash is therefore **not supported** by this plugin.
 
 ### Repository access
 
@@ -86,7 +126,7 @@ and the source at that commit were checked, not a local Hermes source checkout.
 | Manifest | `hermes_cli/plugins_manifest.py` retains v1 support; v2 is additive, not required here. `manifest_version: 1` stays. `requires_hermes: >=0.21.7` is the conservative **audited contract floor**, not proof that earlier versions fail or that a live Desktop minimum was exercised. |
 | Pane/workspace | `host.openWorkspace(id, {dock, minWidth, render, title, onClose})` returns a close disposer. IDs remain `plugin-workspace:<id>`; visibility/reveal/undismiss and `ctx.onDispose` still match the existing pane lifecycle. `TITLEBAR_AREAS` is an object with `titleBar.left/center/right`, not a string; the old Node adapter allowed undefined registration areas in tests. |
 | Storage | `ctx.storage.get(key, fallback)` is synchronous JSON persistence under `hermes.plugin.<id>.`; `set`/`remove` remain available. Repository, order and assignment keys remain unchanged. The existing pane-open localStorage key is preserved. |
-| Shell/output | `tui_gateway/methods_tools.py` still returns `{stdout, stderr, code}`, redacts output and keeps the last 4,000 stdout characters. Hex chunking remains necessary; base64 is only used to carry Windows command text into Git Bash. Windows missing-Bash retry improvements are separate follow-up scope. |
+| Shell/output | `tui_gateway/methods_tools.py` still returns `{stdout, stderr, code}`, redacts output and keeps the last 4,000 stdout characters. Hex chunking remains necessary; base64 is only used to carry Windows command text into Git Bash. Windows discovery now checks standard/portable Git Bash paths, keeps rejected host RPCs intact and retries uncached failures; see Windows shell setup above. |
 | Theme/CSS | All referenced `--ui-*` tokens exist in upstream `styles.css`/theme presets, including editor-surface and diff colors. The existing scoped CSS stays unchanged. Source token presence does **not** prove a disk plugin's utility classes are included in the shipped CSS or visually correct in light/dark matte/glass. |
 
 ### Tests and verification limits

@@ -938,10 +938,11 @@ test('Repo picker drag order: user order wins and outlives the discovery window'
 // Issue #57: one table covers gh failure classification.
 test('classifyGhError maps known CLI failures to recovery kinds', () => {
   const cases = [
-    ['sh: gh: command not found', 'missing', undefined],
-    ['zsh: command not found: gh', 'missing', undefined],
-    ['You are not logged into any GitHub hosts. To log in, run: gh auth login', 'auth', 'gh auth login'],
-    ['gh: Bad credentials (HTTP 401)', 'auth', 'gh auth login'],
+    ['sh: gh: command not found', 'missing', 'gh --version'],
+    ['zsh: command not found: gh', 'missing', 'gh --version'],
+    ['/usr/bin/bash: line 1: gh: command not found', 'missing', 'gh --version'],
+    ['You are not logged into any GitHub hosts. To log in, run: gh auth login', 'auth', 'gh auth status'],
+    ['gh: Bad credentials (HTTP 401)', 'auth', 'gh auth status'],
     ['HTTP 403: API rate limit exceeded for user ID 1', 'rate', undefined],
     ['failed to run external command: Could not resolve host: api.github.com', 'network', undefined],
     ['Post "https://api.github.com/graphql": dial tcp: connection refused', 'network', undefined],
