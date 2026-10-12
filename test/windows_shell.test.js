@@ -22,13 +22,15 @@ test('shell: every gh/hermes invocation resolves the binary per platform', () =>
 test('shell: every shell.exec goes through the shellCommand wrapper', () => {
   // A raw `host.request('shell.exec', { command: cmd })` call site bypasses the
   // Windows bash hop and reintroduces the cmd.exe bug for that one query.
-  const calls = source.match(/host\.request\('shell\.exec', \{ command: [^}]*\}/g) || []
+  const calls = source.split('\n').filter(line => line.includes("host.request('shell.exec', { command:"))
   assert.ok(calls.length >= 4, 'expected the wrapper callers, the where-git probe and the bash probe')
   for (const call of calls) {
     const ok =
       call.includes('shellCommand(') ||
       call.includes("'where git'") ||
-      call.includes('if exist')
+      call.includes("'where bash'") ||
+      call.includes('for %G in') ||
+      call.includes('uname -s')
     assert.ok(ok, `unwrapped shell.exec call site: ${call}`)
   }
   // cmd.exe parses the whole command string (no \" handling; |>&^% are live), so user
@@ -47,8 +49,8 @@ test('shell: Windows routes through Git bash, not WSL bash', () => {
   assert.ok(source.includes('function resolveBash'), 'resolveBash is missing')
   assert.ok(source.includes('command: \'where git\''), 'bash must be derived from the git install')
   assert.ok(source.includes("git.replace(/\\\\/g, '/')"), 'Windows paths must be normalized before parsing')
-  assert.ok(source.includes('(?:cmd|mingw64\\/bin|usr\\/bin)'), 'all Git-for-Windows install layouts must resolve')
-  assert.ok(source.includes('bin\\\\bash.exe'), 'expected Git-for-Windows bash candidates')
+  assert.ok(source.includes('(?:cmd|bin|mingw64\\/bin|usr\\/bin)'), 'all Git-for-Windows install layouts must resolve')
+  assert.ok(source.includes('%LOCALAPPDATA%\\\\Programs\\\\Git\\\\bin\\\\bash.exe'), 'expected per-user Git-for-Windows bash candidate')
   assert.ok(!/const BASH = '[A-Z]:/.test(source), 'bash path must not be hardcoded to a drive letter')
   // The first command must wait for the Git-for-Windows probe; it must never
   // race into bare `bash` and accidentally launch System32's WSL shim.

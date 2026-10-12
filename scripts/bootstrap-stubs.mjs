@@ -20,9 +20,23 @@ const files = {
     type: 'module',
     main: './index.js',
   },
-  'node_modules/@hermes/plugin-sdk/index.js': `export const host = { state: { activeSessionId: {} }, request: async () => ({ code: 0, stdout: '' }) }
-export const atom = (init) => ({ get: () => init, set: () => {} })
-export const useValue = () => null
+  'node_modules/@hermes/plugin-sdk/index.js': `// v0.21.7 contract adapter; NOT a renderer or gateway implementation.
+export const atom = (initial) => {
+  let value = initial
+  const listeners = new Set()
+  const store = {
+    get: () => value,
+    set: next => { const previous = value; if (Object.is(next, value)) return; value = next; listeners.forEach(fn => fn(value, previous)) },
+    listen: fn => { listeners.add(fn); return () => listeners.delete(fn) },
+    subscribe: fn => { const stop = store.listen(fn); fn(value); return stop },
+  }
+  return store
+}
+export const host = {
+  state: { activeSessionId: atom(null), cwd: atom(''), profile: atom('default'), gateway: atom('idle') },
+  request: async () => { throw new Error('SDK test adapter: configure host.request explicitly') },
+}
+export const useValue = store => store.get()
 export const useQuery = () => ({ isLoading: false, isError: false, data: null })
 export const useMutation = () => ({ mutate: () => {}, isPending: false, error: null })
 export const queryClient = { invalidateQueries: () => Promise.resolve() }
@@ -56,7 +70,7 @@ export const icons = {}
 export const cn = (...args) => args.filter(Boolean).join(' ')
 export const relativeTime = () => ''
 export const PALETTE_AREA = 'palette'
-export const TITLEBAR_AREAS = 'titlebar'
+export const TITLEBAR_AREAS = { left: 'titleBar.left', center: 'titleBar.center', right: 'titleBar.right' }
 export const PANES_AREA = 'panes'
 export const STATUSBAR_AREAS = { left: 'statusBar.left', right: 'statusBar.right' }
 export const ROUTES_AREA = 'routes'
@@ -72,7 +86,7 @@ export const Tip = () => null
       './jsx-runtime': './jsx-runtime.js',
     },
   },
-  'node_modules/react/index.js': `export const useState = (init) => [init, () => {}]
+  'node_modules/react/index.js': `export const useState = (init) => [typeof init === 'function' ? init() : init, () => {}]
 export const useEffect = () => {}
 export const useMemo = (fn) => fn()
 export const useRef = (init) => ({ current: init })

@@ -13,7 +13,7 @@ test('Issue #26: pane and page share one repository-selection shell', () => {
   // add only one more.
   assert.equal((source.match(/const gitQ = useSessionGit\(cwd\)/g) || []).length, 3)
   assert.equal((source.match(/useGitHubShellState\(\)/g) || []).length, 3)
-  assert.equal((source.match(/placeholder: 'Filter by title, #number, author, branch or label'/g) || []).length, 2)
+  assert.equal((source.match(/placeholder: aggregateScope\(repo\) \? 'Search text or owner\/repo#42' : 'Filter by title, #number, author, branch or label'/g) || []).length, 2)
 })
 
 test('Issue #27: conversation sources start together', () => {
@@ -109,7 +109,8 @@ test('Issue #31: pane and page wire the shared list keyboard flow', () => {
 
 test('Issue #30: list filter tokens keep row and token actions separate', () => {
   const lists = source.slice(source.indexOf('function PrList'), source.indexOf('function DetailToolbar'))
-  assert.equal((lists.match(/jsxs\('div', \{\n\s+onClick: \(\) => onOpen\(/g) || []).length, 2)
+  assert.equal((lists.match(/jsxs\('div', \{\r?\n\s+onClick: \(\) =>/g) || []).length, 2)
+  assert.ok(lists.includes('if (issueDetailAllowed($issueQueue.get())) onOpen(it.number)'))
   assert.equal((lists.match(/className: 'gh-row-open/g) || []).length, 2)
   assert.ok(lists.includes("setListFilter(event, 'author', pr.author?.login)"))
   assert.ok(lists.includes("setListFilter(event, 'label', l.name)"))

@@ -1,5 +1,7 @@
 # GitHermes
 
+GitHermes **0.6.0** — [Crome696/githermes](https://github.com/Crome696/githermes).
+
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
 > **Community plugin.** GitHermes is an open-source, independent project. It is **not** an official Nous Research product and is not developed or maintained by the Hermes team. It works with Hermes Desktop through its public plugin API.
@@ -33,8 +35,48 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 
 ## Requirements
 
-- Hermes Desktop
+- Hermes Desktop 0.21.7 or newer (audited SDK floor; see verification limits below)
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth status`)
+- **Windows:** [Git for Windows](https://gitforwindows.org/) (Git Bash and its POSIX tools), plus `gh` on the PATH inherited by Hermes. WSL's `C:\Windows\System32\bash.exe` is not a substitute.
+
+### Windows shell setup and recovery
+
+The SDK/gateway contract is audited against **Hermes Desktop v0.21.7+9**,
+commit `41cd7b649d0980`. Automated transport tests ran on Windows 11 through
+real `cmd.exe` → Git Bash; this is **not** a live Desktop-tested minimum.
+Linux/macOS Desktop loading and interactions remain unverified.
+
+GitHermes checks every `where git` result (including portable Git),
+`%ProgramFiles%\Git\bin\bash.exe` / `usr\bin\bash.exe`,
+`%ProgramFiles(x86)%\Git\bin\bash.exe`,
+`%LOCALAPPDATA%\Programs\Git\bin\bash.exe` / `usr\bin\bash.exe`,
+and `where bash`. Candidates must report a MINGW/MSYS environment; the Windows
+System32/SysWOW64 WSL shims are never invoked. Discovery failures are not cached:
+fix the installation and click **Retry** in the pane, without closing it.
+
+For a custom/portable installation, add Git's `bin` directory to the PATH used
+to **launch Hermes**. Check `where bash`, `gh --version` and `gh auth status`
+in that terminal; run `gh auth login` if authentication is missing. Recovery
+commands in the pane are copy-only, not automatic installers or login prompts.
+If you changed the parent process's PATH, restart Hermes once to inherit it;
+Retry cannot update an already running gateway's environment.
+
+**Host boundary:** at the audited commit, `shell.exec` consumes only `command`
+and uses Python `subprocess.run(..., shell=True)`: Windows `cmd.exe`, POSIX's
+system shell. It exposes no `shell`, `executable` or direct-process/argv option.
+The gateway does not use the terminal tool's Bash selector for this RPC, and
+there is no audited per-RPC Bash-path setting to recommend. If another host
+build rejects `shell.exec` *before executing the command*, GitHermes cannot
+repair that launcher with a command wrapper; repair the host shell installation
+or launch PATH and follow that build's host documentation, then Retry.
+No undocumented RPC option or host configuration is assumed here.
+
+The current large-output/comment transport still requires POSIX utilities,
+`/tmp`, pipelines and quoting. Hex chunks protect against the gateway's
+4,000-character stdout cap/redaction; base64 carries Windows command text
+safely through cmd.exe. Removing these without a documented shell-neutral
+transport would break large PRs/comments. Native cmd/PowerShell-only operation
+without Git Bash is therefore **not supported** by this plugin.
 
 ### Repository access
 
@@ -51,10 +93,163 @@ repository selection and permissions for a fine-grained token). Organization
 OAuth restrictions, SAML SSO authorization and administrator approval still apply;
 this plugin cannot bypass them or expose repositories the account cannot access.
 
+## Cross-repository issue queue and persistent Goal
+
+Select open issues in **any individual or combined Issues list**. One shared
+queue preserves selection order across repositories, owners, scopes and filters.
+Identity is case-insensitive `owner/repo#number`, so equal issue numbers from
+different repositories remain distinct. The queue displays repository, title,
+labels and current GitHub assignees. Reorder with Up/Down buttons or drag handlers,
+and remove items individually. Existing version-1 repository drafts migrate
+without deleting their original storage; malformed data is not executable.
+
+While any issue is selected, issue-detail navigation is blocked for row, title,
+chevron and keyboard activation. **Auswahl aufheben** explicitly exits selection
+mode; checkboxes, removal and ordering remain available. The selection is saved
+locally before the UI publishes a change, so a storage failure keeps the prior
+saved selection. The draft is restored after reload.
+
+Choose a **Profil** (the current/default profile also works without a named bot),
+inspect **Goal-Prompt vor Erstellung ansehen**, then click **Goal erstellen**.
+That explicit action creates a separate profiled session, sets its title, and
+calls the real native `command.dispatch` `/goal -- <objective>` contract. Native
+Goals persist in the owning profile's `SessionDB.state_meta`. GitHermes verifies
+`/goal show` against the native normalized objective, then submits the returned
+`type: "send"` kickoff message through the audited session prompt API
+(`prompt.submit`, not an invented `session.submit` RPC). An `exec`-only creation
+response does not start model work. The new session opens in a tab and remains
+reachable through **Neue Session öffnen**.
+
+“Assigned to a profile” means GitHermes's existing internal BotAssignment mapping
+for every selected issue, linked to this session. It **does not** add a GitHub
+assignee named after the local profile, or perform a GitHub assignment mutation.
+The mapping is saved only after Goal verification and an accepted kickoff.
+
+The live preview and submitted Goal use the same option-dependent plan. The
+numbered prompt requests issue/comments review, code analysis, implementation,
+real checks, and a separate PR with a `Closes owner/repo#N` reference per issue.
+
+- **Repository-Ausführung** defaults to sequential global selection order.
+  Parallel mode groups independent repository workers in first-seen repo order,
+  preserving issue order within each repo. Workers must check cross-repo
+  prerequisites and use separately verified checkouts or isolated worktrees.
+- **Refinement erlaubt** defaults to off: no issue-body writes; ask about unclear
+  requirements. Opt-in permits only acceptance-criteria/subtask clarification in
+  the issue body, without expanding scope or weakening gates. Preserve other
+  content, re-read before editing and verify the exact body after writing.
+- **Block on issue** defaults to on: an obstacle, unclear criteria or required
+  review/approval pauses the entire Goal. Off pauses the affected repo queue;
+  only independent repos in parallel mode may continue. Later issues in the
+  blocked repo and sequential global order cannot bypass the blocker.
+- **Bei Fehlern** remains separate: Stop halts the entire Goal on processing
+  errors; Skip permits only transparent skipping of non-blocking errors, never
+  failed required checks, unclear criteria or pending approval.
+- **Auto-merge defaults to off**; only explicit opt-in for the current queue adds
+  conditional merge instructions. Required profile approvals, current-head
+  checks and branch protection still apply. Merge consent resets after reload.
+
+Older drafts keep their items and existing options and receive the safe new
+defaults, with no accidental refinement permission. Explicit new preferences
+persist across reloads. Metadata is untrusted JSON data, with line separators
+escaped so titles cannot inject native completion-contract fields.
+A known matching cwd is supplied only for a single-repository queue; cross-repo
+work must locate and verify each checkout and remote inside the user's allowlist.
+
+The native Goal is persistent; **the issue sequence and repo workers are
+model-directed**, not an atomic native issue executor or a guarantee of parallel
+scheduling or CI/merge ordering. Inspect actual
+work in the new session and use native `/goal status`, `/goal pause`, `/goal resume`
+or `/goal clear` there. Clearing selection does not cancel an existing Goal.
+There is no fabricated per-issue running/merged progress in this panel.
+
+A shared in-flight guard and durable submission receipt prevent duplicate starts
+from repeated clicks. Known-session retries resume the same stored session;
+a lost Goal reply is reconciled with show/resume rather than blindly replacing
+it. Assignment-storage retries do not resend the kickoff. Unknown create or
+kickoff outcomes (for example a transport timeout) require checking the existing
+session instead of risking a duplicate. Hermes's create idempotency key is also
+supplied, but its gateway-memory lifetime is not a durable restart guarantee.
+
+Contracts were audited at Hermes `41cd7b649d0980c57620035af736f91be10dae79`
+(and Goal sources at `2ddbd66ac6e511bbfe9acf696f67412c57685f63`). An isolated
+probe executes the exact upstream command handler and GoalManager with real
+SessionDB, verifies profile-owned state and restores it in a fresh process.
+Mullvad light/dark production-component flows use synthetic host RPCs; no active
+profile Goals, model calls or GitHub mutations are used by verification. Native
+Desktop loading and user-run model work remain separate acceptance boundaries.
+See the official [Persistent Goals documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/goals/).
+The existing Windows Git Bash transport is retained.
+
+## Combined user / organization view
+
+The repository picker starts with **Alle meine Repos**, followed by **Alle in
+<Owner>** for your authenticated user and every discovered member organization.
+The selected scope is saved in plugin storage and survives reloads; a combined
+scope is not replaced when the active session changes repositories. Individual
+repository entries, manual selection and drag ordering remain available.
+
+“Mine” means repositories owned by your user or a member organization, **not**
+repositories owned by another user who added you as a collaborator. The
+single-repository picker still discovers all user/collaborator/organization
+repositories. Archived repositories are excluded. Forks are excluded by default;
+**Include forks** enables them in the combined view.
+
+PRs and Issues each get an owner-spanning, updated-newest-first list. Every row
+has an owner avatar and `owner/repo` chip, alongside the existing labels, times,
+CI/review decisions, branch and diff/file counts. Opening a row preserves its
+repository identity through Conversation, Commits, Checks, Files and the existing
+merge controls; Back returns to the combined scope and filters.
+
+Use Owner, Repo, open/closed/merged state (merged is PR-only), Assigned to me,
+Authored by me and Review requested (PR-only). Combined **Closed** PRs exclude
+merged PRs. Free text searches the GitHub index across the scope, not just loaded
+rows; author/label chips generate safe scoped tokens. Arbitrary GitHub query
+operators are not accepted as raw scope overrides; free-text words are quoted,
+and quotes/backslashes in search text are rejected with a hint. Search input is
+debounced. A bare `#42` requires a Repo filter. Use `owner/repo#42`, or `repo#42`
+with an Owner selected, for an unambiguous direct lookup beyond Search's window.
+All references are checked against the selected user/organization scope.
+
+Implementation uses **one batched GraphQL request for up to eight owners**, with
+separate aliased Search connections for each owner and CI/review metadata in the
+same response. This is a true union, independent of mixed `user:X org:Y` or
+advanced `OR` parser semantics. Larger memberships use additional owner batches;
+there is never a request loop over every repository. Each owner starts with 50
+results and its own cursor. **Mehr laden** appends unfinished owner pages,
+deduplicates by `owner/repo#number` and re-sorts loaded rows. The displayed count
+is **loaded rows**, not a claim of complete global inventory. Results are cached
+for 60 seconds without automatic search polling; **Refresh combined list** resets
+the window and retries discovery. Requests are serialized at least 2.2 seconds
+apart, below 30/minute; other tools sharing the credential can still exhaust its
+quota. Rate-limit/network failures are visible and retain previously loaded rows.
+
+GitHub Search exposes at most **1,000 results per owner/query**, even with cursors.
+The UI warns when the total exceeds that limit and asks you to narrow Owner,
+Repo, status or text; it never silently labels that window “all”. CI uses GitHub's
+complete rollup state; label/check metadata caps are disclosed when reached.
+Fork exclusion is applied to returned `repository.isFork`, because `fork:false`
+is not a valid issue-search filter and can yield zero results.
+
+Organization discovery follows all `GET /user/orgs` pages. A classic OAuth scope
+missing `read:org` is reported separately from SSO/OAuth organization restrictions.
+For fine-grained/App credentials, missing OAuth scope headers mean **unknown**,
+not “no organization access”. Organization-specific GraphQL authorization errors
+produce a partial-list hint, while remaining owners still load. GitHub can also
+silently hide private results; the UI explicitly tells you to check token scopes,
+repository selection, SSO authorization and administrator approval if an owner
+looks incomplete. Authentication, network and rate errors are not disguised as
+empty success. No permission is granted automatically.
+
+Verification: `node --test` covers query/scope safety, exact lookups, merging,
+pagination, partial authorization, limit warnings and real Windows/capped JSON
+transport. A full production-pane React/React Query harness in Mullvad exercises
+public synthetic fixtures in light/dark; it is not native Desktop, real SSO or
+an actual merge acceptance test. Those live/platform gates remain as listed below.
+
 ## Install
 
 ```bash
-hermes plugins install claudiumio/githermes --enable
+hermes plugins install Crome696/githermes --enable
 ```
 
 Or manually: drop this folder into `~/.hermes/plugins/githermes/` (unified package — the desktop half lives at `desktop/plugin.js`), or copy `desktop/plugin.js` to `~/.hermes/desktop-plugins/githermes/plugin.js` (standalone disk door). The app hot-reloads on save.
@@ -68,7 +263,41 @@ The plugin **id** changed (`github-prs` → `githermes`), so the old install mus
 - Disk plugins load **uncompiled**: UI is written with `jsx()`/`jsxs()` calls, no JSX syntax, no build step.
 - Only `@hermes/plugin-sdk`, `react`, and `react/jsx-runtime` are importable.
 - Tailwind classes must already exist in the app's compiled CSS — arbitrary `var()` bracket forms (`bg-[var(--x)]`) are silently dead at runtime. Use the paren shorthand (`text-(--ui-text-tertiary)`) or scoped `<style>` blocks with real theme variables.
-- Large `gh` payloads go through `shBig` / `shJsonBig` (base64 chunks under the gateway stdout cap). Lists are capped at 30 rows by design.
+- Large `gh` payloads go through `shBig` / `shJsonBig` (lowercase **hex**, not base64, in 3,800-character chunks under the 4,000-character gateway stdout cap). Single-repo lists start at 30 rows and grow on demand up to 120; combined lists use 50-row owner cursors and explicit Search-limit warnings, not that 120-row cap. Repository discovery is paginated without a list cap. Large GraphQL request bodies are chunked into a temporary file and passed on stdin (`gh api graphql --input -`) so Windows command/path limits do not truncate queries.
+
+### Hermes 0.21.7 compatibility audit
+
+The audit targets **v0.21.7+9**, upstream commit
+[`41cd7b649d0980c57620035af736f91be10dae79`](https://github.com/NousResearch/hermes-agent/commit/41cd7b649d0980c57620035af736f91be10dae79).
+The authoritative [Desktop SDK guide](https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk)
+and the source at that commit were checked, not a local Hermes source checkout.
+
+| Boundary | Finding |
+| --- | --- |
+| Release history | Official tags/releases expose v0.21.6 and v0.21.7, but no exact v0.21.1–v0.21.5 tags/releases. Both patch notes defer full curated notes to v0.22.0; missing notes are not evidence of no changes. v0.21.6 mentions isolated backend plugins and unified settings; v0.21.7 mentions new additive SDK actions/pet APIs. |
+| Desktop loader/imports | `contrib/runtime-loader.ts` and `sdk/runtime.ts` still rewrite SDK/React imports to live ESM shims. Every GitHermes named SDK import exists at the audited commit. Unified `plugins/<id>/desktop/plugin.js` and standalone `desktop-plugins/<id>/plugin.js` remain supported; unified packages inventory disabled until enabled. No production import migration was indicated. |
+| Manifest | `hermes_cli/plugins_manifest.py` retains v1 support; v2 is additive, not required here. `manifest_version: 1` stays. `requires_hermes: >=0.21.7` is the conservative **audited contract floor**, not proof that earlier versions fail or that a live Desktop minimum was exercised. |
+| Pane/workspace | `host.openWorkspace(id, {dock, minWidth, render, title, onClose})` returns a close disposer. IDs remain `plugin-workspace:<id>`; visibility/reveal/undismiss and `ctx.onDispose` still match the existing pane lifecycle. `TITLEBAR_AREAS` is an object with `titleBar.left/center/right`, not a string; the old Node adapter allowed undefined registration areas in tests. |
+| Storage | `ctx.storage.get(key, fallback)` is synchronous JSON persistence under `hermes.plugin.<id>.`; `set`/`remove` remain available. Repository, order and assignment keys remain unchanged. The existing pane-open localStorage key is preserved. |
+| Shell/output | `tui_gateway/methods_tools.py` still returns `{stdout, stderr, code}`, redacts output and keeps the last 4,000 stdout characters. Hex chunking remains necessary; base64 is only used to carry Windows command text into Git Bash. Windows discovery now checks standard/portable Git Bash paths, keeps rejected host RPCs intact and retries uncached failures; see Windows shell setup above. |
+| Theme/CSS | All referenced `--ui-*` tokens exist in upstream `styles.css`/theme presets, including editor-surface and diff colors. The existing scoped CSS stays unchanged. Source token presence does **not** prove a disk plugin's utility classes are included in the shipped CSS or visually correct in light/dark matte/glass. |
+
+### Tests and verification limits
+
+Run `npm test` on a fresh clone: `pretest` creates repository-local, gitignored
+SDK/React adapters. They model the correct bar slots, observable atoms, lazy
+React state and required host state; an unconfigured RPC fails instead of
+silently returning success. They are **not** Hermes Desktop or a React renderer.
+The Windows baseline also exposed a CRLF-sensitive source assertion; the test
+now accepts both LF and CRLF without weakening its row-action checks.
+
+Deterministic registration/storage/pane and capped-output transport tests do
+not establish live host installation or console cleanliness. Remaining live
+acceptance: CLI and manual installation into an isolated Desktop data root,
+open/dock/picker/list/detail interactions, an authorized disposable PR merge,
+and light/dark × matte/glass on actual Desktop. Linux/macOS live execution is
+also not claimed. No user plugin/profile, GitHub issue, or PR is changed by the
+test suite.
 
 ## Status & contributing
 
