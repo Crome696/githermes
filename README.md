@@ -93,6 +93,72 @@ repository selection and permissions for a fine-grained token). Organization
 OAuth restrictions, SAML SSO authorization and administrator approval still apply;
 this plugin cannot bypass them or expose repositories the account cannot access.
 
+## Combined user / organization view
+
+The repository picker starts with **Alle meine Repos**, followed by **Alle in
+<Owner>** for your authenticated user and every discovered member organization.
+The selected scope is saved in plugin storage and survives reloads; a combined
+scope is not replaced when the active session changes repositories. Individual
+repository entries, manual selection and drag ordering remain available.
+
+“Mine” means repositories owned by your user or a member organization, **not**
+repositories owned by another user who added you as a collaborator. The
+single-repository picker still discovers all user/collaborator/organization
+repositories. Archived repositories are excluded. Forks are excluded by default;
+**Include forks** enables them in the combined view.
+
+PRs and Issues each get an owner-spanning, updated-newest-first list. Every row
+has an owner avatar and `owner/repo` chip, alongside the existing labels, times,
+CI/review decisions, branch and diff/file counts. Opening a row preserves its
+repository identity through Conversation, Commits, Checks, Files and the existing
+merge controls; Back returns to the combined scope and filters.
+
+Use Owner, Repo, open/closed/merged state (merged is PR-only), Assigned to me,
+Authored by me and Review requested (PR-only). Combined **Closed** PRs exclude
+merged PRs. Free text searches the GitHub index across the scope, not just loaded
+rows; author/label chips generate safe scoped tokens. Arbitrary GitHub query
+operators are not accepted as raw scope overrides; free-text words are quoted,
+and quotes/backslashes in search text are rejected with a hint. Search input is
+debounced. A bare `#42` requires a Repo filter. Use `owner/repo#42`, or `repo#42`
+with an Owner selected, for an unambiguous direct lookup beyond Search's window.
+All references are checked against the selected user/organization scope.
+
+Implementation uses **one batched GraphQL request for up to eight owners**, with
+separate aliased Search connections for each owner and CI/review metadata in the
+same response. This is a true union, independent of mixed `user:X org:Y` or
+advanced `OR` parser semantics. Larger memberships use additional owner batches;
+there is never a request loop over every repository. Each owner starts with 50
+results and its own cursor. **Mehr laden** appends unfinished owner pages,
+deduplicates by `owner/repo#number` and re-sorts loaded rows. The displayed count
+is **loaded rows**, not a claim of complete global inventory. Results are cached
+for 60 seconds without automatic search polling; **Refresh combined list** resets
+the window and retries discovery. Requests are serialized at least 2.2 seconds
+apart, below 30/minute; other tools sharing the credential can still exhaust its
+quota. Rate-limit/network failures are visible and retain previously loaded rows.
+
+GitHub Search exposes at most **1,000 results per owner/query**, even with cursors.
+The UI warns when the total exceeds that limit and asks you to narrow Owner,
+Repo, status or text; it never silently labels that window “all”. CI uses GitHub's
+complete rollup state; label/check metadata caps are disclosed when reached.
+Fork exclusion is applied to returned `repository.isFork`, because `fork:false`
+is not a valid issue-search filter and can yield zero results.
+
+Organization discovery follows all `GET /user/orgs` pages. A classic OAuth scope
+missing `read:org` is reported separately from SSO/OAuth organization restrictions.
+For fine-grained/App credentials, missing OAuth scope headers mean **unknown**,
+not “no organization access”. Organization-specific GraphQL authorization errors
+produce a partial-list hint, while remaining owners still load. GitHub can also
+silently hide private results; the UI explicitly tells you to check token scopes,
+repository selection, SSO authorization and administrator approval if an owner
+looks incomplete. Authentication, network and rate errors are not disguised as
+empty success. No permission is granted automatically.
+
+Verification: `node --test` covers query/scope safety, exact lookups, merging,
+pagination, partial authorization, limit warnings and real Windows/capped JSON
+transport. A full production-pane React/React Query harness in Mullvad exercises
+public synthetic fixtures in light/dark; it is not native Desktop, real SSO or
+an actual merge acceptance test. Those live/platform gates remain as listed below.
+
 ## Install
 
 ```bash
@@ -110,7 +176,7 @@ The plugin **id** changed (`github-prs` → `githermes`), so the old install mus
 - Disk plugins load **uncompiled**: UI is written with `jsx()`/`jsxs()` calls, no JSX syntax, no build step.
 - Only `@hermes/plugin-sdk`, `react`, and `react/jsx-runtime` are importable.
 - Tailwind classes must already exist in the app's compiled CSS — arbitrary `var()` bracket forms (`bg-[var(--x)]`) are silently dead at runtime. Use the paren shorthand (`text-(--ui-text-tertiary)`) or scoped `<style>` blocks with real theme variables.
-- Large `gh` payloads go through `shBig` / `shJsonBig` (lowercase **hex**, not base64, in 3,800-character chunks under the 4,000-character gateway stdout cap). Lists start at 30 rows and grow on demand up to 120; repository discovery is paginated without that list cap.
+- Large `gh` payloads go through `shBig` / `shJsonBig` (lowercase **hex**, not base64, in 3,800-character chunks under the 4,000-character gateway stdout cap). Single-repo lists start at 30 rows and grow on demand up to 120; combined lists use 50-row owner cursors and explicit Search-limit warnings, not that 120-row cap. Repository discovery is paginated without a list cap. Large GraphQL request bodies are chunked into a temporary file and passed on stdin (`gh api graphql --input -`) so Windows command/path limits do not truncate queries.
 
 ### Hermes 0.21.7 compatibility audit
 

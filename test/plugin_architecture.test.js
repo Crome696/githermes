@@ -13,7 +13,7 @@ test('Issue #26: pane and page share one repository-selection shell', () => {
   // add only one more.
   assert.equal((source.match(/const gitQ = useSessionGit\(cwd\)/g) || []).length, 3)
   assert.equal((source.match(/useGitHubShellState\(\)/g) || []).length, 3)
-  assert.equal((source.match(/placeholder: 'Filter by title, #number, author, branch or label'/g) || []).length, 2)
+  assert.equal((source.match(/placeholder: aggregateScope\(repo\) \? 'Search text or owner\/repo#42' : 'Filter by title, #number, author, branch or label'/g) || []).length, 2)
 })
 
 test('Issue #27: conversation sources start together', () => {

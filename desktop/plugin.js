@@ -2,7 +2,8 @@
  * GitHermes — GitHub PRs & Issues as a right workspace pane.
  * GitHub data via `host.request('shell.exec')` + connected `gh`; Bot assignment via gateway session RPCs. No backend.
  * Session PR: cwd git branch (same join as core review) + transcript URL scan.
- * ponytail: lists page from a 30-row window up to a 120 cap; payloads route through shBig (stdout 4000 cap).
+ * Single-repo lists grow from 30 to 120; combined scopes use owner Search cursors
+ * and explicit 1,000-result warnings. Payloads route through shBig (stdout 4000 cap).
  */
 import {
   host,
@@ -1217,6 +1218,7 @@ export function getGitHubShellStore() {
   // Hot reload: the cached store was built by an older plugin build, so atoms
   // added since must be backfilled here or fresh modules dereference undefined.
   if (!store.repoOrder) store.repoOrder = atom(null)
+  if (!store.aggregateFilters) store.aggregateFilters = atom({owner:'',repo:'',assigned:false,authored:false,review:false,forks:false})
   return store
 }
 
@@ -1334,6 +1336,230 @@ function useRepos() {
     queryFn: () => loadAccessibleRepos(),
     staleTime: 60_000,
   })
+}
+
+// Combined scopes deliberately differ from repository identifiers. Discovery for
+// single-repo picking stays loadAccessibleRepos (including foreign collaborators).
+export function aggregateScope(value) {
+  if (value === '@all') return { type: 'all' }
+  const m = String(value || '').match(/^@owner:([A-Za-z0-9][A-Za-z0-9-]*)$/)
+  return m ? { type: 'owner', owner: m[1] } : null
+}
+function scopeLabel(value) {
+  const scope = aggregateScope(value)
+  return scope?.type === 'all' ? 'Alle meine Repos' : scope ? `Alle in ${scope.owner}` : value
+}
+const ownerOk = value => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(value)
+export function organizationAccessError(error) {
+  return /SAML|SSO|OAuth.*restrict|organization.*(access|authoriz)|Resource protected|Resource not accessible by integration|read:org/i.test(String(error?.message || error || ''))
+}
+// Scope headers are metadata, not credentials. Empty headers often mean a
+// fine-grained/App token: absence is unknown, NOT proof of missing read:org.
+export function parseAuthDiscovery(raw) {
+  const text = String(raw || '').replace(/\r/g, '')
+  const start = text.indexOf('\n\n')
+  if (start < 0) throw new Error('Invalid authentication metadata response')
+  const headers = text.slice(0, start)
+  const user = JSON.parse(text.slice(start + 2))
+  if (!ownerOk(user?.login)) throw new Error('Invalid authenticated GitHub user')
+  const scopes = headers.match(/^x-oauth-scopes:\s*(.*)$/im)?.[1]?.trim() || ''
+  const notice = scopes && !scopes.split(/,\s*/).some(s => ['read:org', 'write:org', 'admin:org'].includes(s))
+    ? 'Token scopes lack read:org. Organization discovery may be incomplete. Check gh auth status; grant read:org if appropriate. This is different from SSO authorization.'
+    : !scopes ? 'OAuth scopes unavailable (for example a fine-grained/App token). Organization/private repository access cannot be inferred; check gh auth status and token repository permissions.' : ''
+  const sso = headers.match(/^x-github-sso:\s*(.*)$/im)?.[1]
+  return { viewer: user.login, notices: [notice, sso ? 'GitHub reports partial SSO access. Authorize the token for the affected organizations.' : ''].filter(Boolean) }
+}
+export async function loadAggregateOwners(run = shBig) {
+  const auth = parseAuthDiscovery(await run(`${GH} api --include user`))
+  let pages
+  try { pages = JSON.parse(await run(`${GH} api 'user/orgs?per_page=100' --paginate --slurp`)) }
+  catch (error) {
+    if (!organizationAccessError(error)) throw error
+    return { ...auth, owners: [{ login: auth.viewer, kind: 'user' }], notices: [...auth.notices, 'Organization discovery is restricted by SSO/OAuth. Showing personal repositories only; authorize gh and Refresh.'] }
+  }
+  if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page))) throw new Error('Invalid organization discovery response')
+  const seen = new Set([auth.viewer.toLowerCase()])
+  const owners = [{ login: auth.viewer, kind: 'user' }]
+  for (const org of pages.flat()) {
+    if (!ownerOk(org?.login)) throw new Error('Invalid organization login')
+    if (!seen.has(org.login.toLowerCase())) { seen.add(org.login.toLowerCase()); owners.push({login: org.login, kind:'org'}) }
+  }
+  return { ...auth, owners }
+}
+const AGGREGATE_FIELDS = `fragment Row on Issue { number title state updatedAt url author { login } assignees(first:100) { nodes { login } pageInfo { hasNextPage } } labels(first:100) { nodes { name color } pageInfo { hasNextPage } } repository { nameWithOwner isArchived isFork owner { login } } }
+fragment PrRow on PullRequest { number title state updatedAt url author { login } assignees(first:100) { nodes { login } pageInfo { hasNextPage } } labels(first:100) { nodes { name color } pageInfo { hasNextPage } } repository { nameWithOwner isArchived isFork owner { login } } reviewRequests(first:100) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage } } isDraft additions deletions changedFiles headRefName baseRefName reviewDecision commits(last:1) { nodes { commit { statusCheckRollup { state contexts(first:100) { nodes { __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } pageInfo { hasNextPage } } } } } } }`
+
+// Separate owner searches in ONE GraphQL request implement a true union. Mixed
+// user:X org:Y qualifiers (or an unverified OR expression) are never used. Alias
+// paths also let an inaccessible org fail without losing other owners' rows.
+export function buildAggregateRequest({owners, kind = 'prs', state = 'open', filters = {}, query = '', viewer = '', cursors = {}}) {
+  if (!Array.isArray(owners) || !owners.length || owners.some(o => !ownerOk(o.login) || !['user','org'].includes(o.kind))) throw new Error('Invalid owner scope')
+  if (!['prs','issues'].includes(kind) || !['open','closed','merged','all'].includes(state)) throw new Error('Invalid list state')
+  if (kind === 'issues' && (state === 'merged' || filters.review)) throw new Error('Review/merged filters apply only to pull requests')
+  let selected = owners.filter(o => !filters.owner || o.login.toLowerCase() === String(filters.owner).toLowerCase())
+  if (filters.owner && !selected.length) throw new Error('Owner is outside your user/organization scope')
+  let repo = String(filters.repo || '').trim()
+  let number = null
+  let text = String(query || '').trim()
+  const ref = text.match(/^([A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?)#([1-9][0-9]*)$/)
+  if (ref) {
+    number = Number(ref[2])
+    if (!Number.isSafeInteger(number)) throw new Error('Invalid item number')
+    if (ref[1].includes('/')) repo = ref[1]
+    else {
+      const owner = filters.owner || (selected.length === 1 ? selected[0].login : '')
+      if (!owner) throw new Error('Use owner/repo#42, or select an Owner for repo#42')
+      repo = `${owner}/${ref[1]}`
+    }
+    text = ''
+  } else if (/^#?\d+$/.test(text)) {
+    if (!repo) throw new Error('Numbers need a repository: use owner/repo#42 or select a Repo')
+    number = Number(text.replace('#',''))
+    if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid item number')
+    text = ''
+  }
+  if (repo) {
+    if (!repoOk(repo)) throw new Error('Repo filter must use owner/repo')
+    selected = selected.filter(o => o.login.toLowerCase() === repo.split('/')[0].toLowerCase())
+    if (!selected.length) throw new Error('Repository is outside the selected owned scope')
+  }
+  if ((filters.assigned || filters.authored || filters.review) && !ownerOk(viewer)) throw new Error('Authenticated user is required for personal filters')
+  if (text.length > 256) throw new Error('Search text is limited to 256 characters')
+  const parsed = parseListQuery(text)
+  // Quote all free-text words, not arbitrary GitHub query syntax. A typed org:
+  // or OR can never escape the fixed scope. Author/label chip tokens are safe
+  // quoted values. Reject syntax with unclear escaping instead of widening it.
+  const term = value => { if (/["\\\r\n]/.test(value)) throw new Error('Search terms cannot contain quotes, backslashes or newlines'); return `"${value}"` }
+  const common = [kind === 'prs' ? 'is:pr' : 'is:issue', 'archived:false']
+  // fork:false is a REPOSITORY-search qualifier, not an ISSUE-search filter:
+  // GitHub returns zero issue results for it. Filter repository.isFork locally
+  // while following the search cursors; never narrow away the entire inventory.
+  if (state !== 'all') common.push(state === 'closed' && kind === 'prs' ? 'is:closed is:unmerged' : `is:${state}`)
+  if (filters.assigned) common.push(`assignee:${viewer}`)
+  if (filters.authored) common.push(`author:${viewer}`)
+  if (filters.review) common.push(`review-requested:${viewer}`)
+  for (const author of parsed.authors) { if (!ownerOk(author)) throw new Error('Invalid author filter'); common.push(`author:${author}`) }
+  for (const label of parsed.labels) common.push(`label:${term(label)}`)
+
+  if (parsed.text) common.push(...parsed.text.split(/\s+/).map(term))
+  common.push('sort:updated-desc')
+  const variables = {}
+  const definitions = [], searches = []
+  selected.forEach((o,i) => {
+    definitions.push(`$q${i}: String!`, `$c${i}: String`)
+    variables[`q${i}`] = [...common, repo ? `repo:${repo}` : `${o.kind === 'org' ? 'org' : 'user'}:${o.login}`].join(' ')
+    variables[`c${i}`] = cursors[o.login]?.cursor || null
+    searches.push(`s${i}: search(type: ISSUE, query: $q${i}, first: 50, after: $c${i}) { issueCount pageInfo { hasNextPage endCursor } nodes { __typename ...Row ...PrRow } }`)
+  })
+  if (number) {
+    const [owner, name] = repo.split('/')
+    return {query: `query($owner:String!,$name:String!,$number:Int!) { s0: repository(owner:$owner,name:$name) { issueOrPullRequest(number:$number) { __typename ...Row ...PrRow } } rateLimit { remaining resetAt } } ${AGGREGATE_FIELDS}`, variables:{owner,name,number}, owners:selected, exact:{repo,number}, options:{kind,state,filters,viewer}}
+  }
+  return {query: `query(${definitions.join(',')}) { ${searches.join(' ')} rateLimit { remaining resetAt } } ${AGGREGATE_FIELDS}`, variables, owners:selected, options:{kind,state,filters,viewer}}
+}
+export function mergeAggregateRows(previous = [], incoming = []) {
+  const rows = new Map()
+  for (const row of [...previous, ...incoming]) {
+    if (!repoOk(row?.repo) || !Number.isSafeInteger(row?.number) || row.number < 1) throw new Error('Invalid combined result identity')
+    const key = `${row.repo.toLowerCase()}#${row.number}`
+    const existing = rows.get(key)
+    if (!existing || Date.parse(row.updatedAt) >= Date.parse(existing.updatedAt)) rows.set(key,row)
+  }
+  return [...rows.values()].sort((a,b) => Date.parse(b.updatedAt)-Date.parse(a.updatedAt) || a.repo.localeCompare(b.repo) || b.number-a.number)
+}
+export function decodeAggregateResponse(response, request, previous = {rows:[], cursors:{}, notices:[]}) {
+  if (!response?.data && !response?.errors) throw new Error(response?.message || 'Invalid GitHub search response')
+  const notices = [...previous.notices], cursors = {...previous.cursors}, rows = []
+  for (const error of response.errors || []) {
+    const alias = error.path?.[0]
+    const index = /^s\d+$/.test(alias || '') ? Number(alias.slice(1)) : -1
+    const owner = request.owners[index]
+    if (!owner || owner.kind !== 'org' || !organizationAccessError(error)) throw new Error(error.message || 'GitHub search failed')
+    notices.push(`${owner.login}: SSO/OAuth access restricted. Authorize gh for this organization and Refresh; other owners remain available.`)
+    cursors[owner.login] = {done:true, skipped:true, count:0}
+  }
+  request.owners.forEach((owner,i) => {
+    let result = response.data?.[`s${i}`]
+    if (request.exact && result) result = {nodes:result.issueOrPullRequest ? [result.issueOrPullRequest] : [], issueCount:result.issueOrPullRequest ? 1 : 0, pageInfo:{hasNextPage:false,endCursor:null}}
+    if (cursors[owner.login]?.skipped) return
+    if (!result || !Array.isArray(result.nodes) || !Number.isInteger(result.issueCount) || !result.pageInfo) throw new Error(`Invalid search page for ${owner.login}`)
+    const loaded = (previous.cursors[owner.login]?.loaded || 0) + result.nodes.length
+    if (result.issueCount > 1000) notices.push(`${owner.login}: GitHub Search exposes only the first 1,000 of ${result.issueCount} results. Narrow Owner, Repo, status or search; this is not a complete inventory.`)
+    if (result.pageInfo.hasNextPage && !result.pageInfo.endCursor) throw new Error('GitHub search returned no continuation cursor')
+    if (result.pageInfo.hasNextPage && result.pageInfo.endCursor === previous.cursors[owner.login]?.cursor) throw new Error('GitHub search cursor did not advance')
+    cursors[owner.login] = {cursor:result.pageInfo.endCursor, done:!result.pageInfo.hasNextPage || loaded >= 1000, loaded, count:result.issueCount}
+    for (const node of result.nodes) {
+      if (!node || !['Issue','PullRequest'].includes(node.__typename)) throw new Error('GitHub search returned an inaccessible result')
+      const r = node.repository
+      if (!repoOk(r?.nameWithOwner) || r.nameWithOwner.split('/')[0].toLowerCase() !== owner.login.toLowerCase()) throw new Error('GitHub search returned an out-of-scope repository')
+      if (r.isArchived || (!request.options.filters.forks && r.isFork)) continue
+      if (request.exact) {
+        const {kind,state,filters,viewer} = request.options
+        if ((node.__typename === 'PullRequest') !== (kind === 'prs')) continue
+        const actual = String(node.state).toLowerCase()
+        if (state !== 'all' && actual !== state) continue
+        if (filters.authored && node.author?.login?.toLowerCase() !== viewer.toLowerCase()) continue
+        if (filters.assigned && !node.assignees?.nodes?.some(n => n.login.toLowerCase() === viewer.toLowerCase())) {
+          if (node.assignees?.pageInfo?.hasNextPage) throw new Error('Exact lookup has over 100 assignees; narrow the filter on GitHub')
+          continue
+        }
+        if (filters.review && !node.reviewRequests?.nodes?.some(n => n.requestedReviewer?.login?.toLowerCase() === viewer.toLowerCase())) {
+          if (node.reviewRequests?.pageInfo?.hasNextPage) throw new Error('Exact lookup has over 100 review requests; check GitHub')
+          continue
+        }
+      }
+      if (request.exact && (node.number !== request.exact.number || r.nameWithOwner.toLowerCase() !== request.exact.repo.toLowerCase())) continue
+      const rollup = node.commits?.nodes?.[0]?.commit?.statusCheckRollup
+      if (node.labels?.pageInfo?.hasNextPage) notices.push('Some label lists exceed 100 entries; label chips are partial.')
+      if (rollup?.contexts?.pageInfo?.hasNextPage) notices.push('Some PRs have over 100 checks; the CI summary uses GitHub’s complete rollup state.')
+      rows.push({...node, repo:r.nameWithOwner, labels:node.labels?.nodes || [], statusCheckRollup:rollup ? [{__typename:'StatusContext',state:rollup.state}] : []})
+    }
+  })
+  const rate = response.data?.rateLimit
+  if (rate && rate.remaining < 100) notices.push(`GitHub GraphQL quota low (${rate.remaining} remaining; resets ${rate.resetAt}). Avoid frequent Refresh.`)
+  return { rows:mergeAggregateRows(previous.rows,rows), cursors, notices:[...new Set(notices)], rate, hasMore:Object.values(cursors).some(c => !c.done) }
+}
+// Search calls are serialized and paced below 30/minute, including rapid
+// filter/Refresh clicks. React Query caches each exact scope/filter for 60 s.
+let aggregateQueue = Promise.resolve()
+let aggregateLastRequest = 0
+function paceAggregate(work) {
+  const next = aggregateQueue.catch(() => {}).then(async () => {
+    const wait = Math.max(0, 2200 - (Date.now() - aggregateLastRequest))
+    if (wait) await new Promise(resolve => setTimeout(resolve, wait))
+    aggregateLastRequest = Date.now()
+    try { return await work() }
+    finally { aggregateLastRequest = Date.now() } // Pace from completion, including upload/network time.
+  })
+  aggregateQueue = next
+  return next
+}
+async function runAggregateGraphql(request) {
+  return paceAggregate(async () => {
+    const tag = `/tmp/ghaggregate.${Date.now().toString(36)}${Math.random().toString(36).slice(2,8)}`
+    const input = `${tag}.json`, response = `${tag}.response`, errors = `${tag}.err`, encoded = `${tag}.b64`
+    try {
+      const payload = utf8ToB64(JSON.stringify({query:request.query,variables:request.variables}))
+      await sh(`: > ${sq(encoded)}`)
+      for (let i = 0; i < payload.length; i += 1800) await sh(`printf %s ${sq(payload.slice(i,i+1800))} >> ${sq(encoded)}`)
+      await sh(`{ base64 -d < ${sq(encoded)} || base64 -D < ${sq(encoded)}; } > ${sq(input)}`)
+      // gh exits 1 on partial GraphQL errors too. Keep the JSON data+errors
+      // envelope, but never turn an empty/network response into success.
+      return await shJsonBig(`${GH} api graphql --input - < ${sq(input)} > ${sq(response)} 2> ${sq(errors)}; result=$?; if [ -s ${sq(response)} ]; then cat ${sq(response)}; else cat ${sq(errors)} >&2; exit $result; fi`)
+    } finally { sh(`unlink ${sq(input)}; unlink ${sq(response)}; unlink ${sq(errors)}; unlink ${sq(encoded)}`).catch(() => {}) }
+  })
+}
+export async function fetchAggregatePage(options, previous, run = runAggregateGraphql) {
+  // Bound GraphQL complexity, not repository coverage. Large org inventories
+  // use owner batches of eight; there is never a per-repository request loop.
+  const selected = buildAggregateRequest({...options,cursors:previous?.cursors}).owners
+  const owners = selected.filter(o => !previous?.cursors?.[o.login]?.done)
+  let result = previous || {rows:[],cursors:{},notices:[]}
+  for (let i = 0; i < owners.length; i += 8) {
+    const request = buildAggregateRequest({...options,owners:owners.slice(i,i+8),cursors:result.cursors})
+    result = decodeAggregateResponse(await run(request),request,result)
+  }
+  return result
 }
 
 // Behind count only changes after new data arrives, so the updater polls.
@@ -1653,7 +1879,7 @@ function RepoLabel({ repo, size = 20 }) {
   ] })
 }
 
-function RepoPicker({ repos, value, onChange }) {
+function RepoPicker({ repos, value, onChange, owners = [] }) {
   const OTHER = '__other__'
   const [manualOpen, setManualOpen] = useState(false)
   const [manual, setManual] = useState('')
@@ -1665,7 +1891,7 @@ function RepoPicker({ repos, value, onChange }) {
   const valueRef = useRef(value)
   valueRef.current = value
   const list = Array.isArray(repos) ? repos : []
-  const showManual = manualOpen || !list.length
+  const showManual = manualOpen || (!list.length && !aggregateScope(value))
   const manualOk = repoOk(manual.trim())
 
   // An external value change (session auto-follow, the other picker surface)
@@ -1728,8 +1954,7 @@ function RepoPicker({ repos, value, onChange }) {
   return jsxs('div', {
     className: 'flex min-w-0 flex-col gap-1.5',
     children: [
-      list.length
-        ? jsxs(Popover, {
+      jsxs(Popover, {
           open,
           onOpenChange: o => { setOpen(o); resetDrag() },
           children: [
@@ -1740,7 +1965,7 @@ function RepoPicker({ repos, value, onChange }) {
                 showManual
                   ? jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'Use another repository…' })
                   : value
-                    ? jsx(RepoLabel, { repo: value })
+                    ? aggregateScope(value) ? jsx('span', {children:scopeLabel(value)}) : jsx(RepoLabel, { repo: value })
                     : jsx('span', { className: 'text-(--ui-text-tertiary)', children: 'Select repository' }),
                 jsx(Codicon, { name: 'chevron-down', size: 12, className: 'shrink-0 opacity-60' }),
               ] }),
@@ -1752,6 +1977,13 @@ function RepoPicker({ repos, value, onChange }) {
               // no definite height, so the Radix viewport grows to content and
               // the clipped popover looks locked. overflow-y-auto just works.
               children: jsxs('div', { role: 'listbox', 'aria-label': 'Repositories', className: 'max-h-72 overflow-y-auto', children: [
+                ...['@all', ...owners.map(o => `@owner:${o.login}`)].map(scope => jsx('div', {
+                  role:'option', tabIndex:0, 'aria-selected':value === scope,
+                  className:'gh-repo-option rounded-md px-2 py-1.5 text-xs',
+                  onClick:() => {onChange(scope);setOpen(false)},
+                  onKeyDown:e => {if (e.key === 'Enter' || e.key === ' ') {e.preventDefault();onChange(scope);setOpen(false)}},
+                  children:scopeLabel(scope),
+                },scope)),
                 ...list.map((r, i) => jsxs('div', {
                   draggable: true,
                   role: 'option',
@@ -1789,8 +2021,7 @@ function RepoPicker({ repos, value, onChange }) {
               ] }),
             }),
           ],
-        })
-        : null,
+        }),
       showManual
         ? jsxs('div', {
           className: 'flex min-w-0 flex-col gap-1',
@@ -2188,6 +2419,7 @@ function MergeControl({ repo, number, mergeableState, head, base }) {
       queryClient.invalidateQueries({ queryKey: [ID, 'pr-page', repo, String(number)] })
       queryClient.invalidateQueries({ queryKey: [ID, 'pr-checks', repo, String(number)] })
       queryClient.invalidateQueries({ queryKey: [ID, 'prs', repo] })
+      queryClient.invalidateQueries({ queryKey: [ID, 'aggregate'] })
       queryClient.invalidateQueries({ queryKey: [ID, 'session-git'] })
       setOpen(false)
     } catch (err) {
@@ -2308,6 +2540,7 @@ function ApproveControl({ repo, number }) {
       await sh(`${GH} pr review ${sq(n)} --repo ${sq(repo)} --approve`)
       const plan = approvePlan(repo, n)
       await Promise.all(plan.invalidate.map(queryKey => queryClient.invalidateQueries({ queryKey })))
+      await queryClient.invalidateQueries({ queryKey: [ID, 'aggregate'] })
       setOpen(false)
     } catch (err) {
       setError(err?.message || String(err))
@@ -2398,6 +2631,7 @@ function IssueControl({ repo, number, state }) {
       await sh(`${GH} issue ${action} ${sq(n)} --repo ${sq(repo)}`)
       const plan = issuePlan(repo, n, state)
       await Promise.all(plan.invalidate.map(queryKey => queryClient.invalidateQueries({ queryKey })))
+      await queryClient.invalidateQueries({ queryKey: [ID, 'aggregate'] })
       setConfirming(false)
     } catch (err) {
       setError(err?.message || String(err))
@@ -3052,6 +3286,76 @@ function IssueList({ repo, onOpen, query, active = true }) {
   })
 }
 
+function useAggregateDebounce(value) {
+  const [debounced,setDebounced] = useState(value)
+  useEffect(() => { const timer = setTimeout(() => setDebounced(value),400); return () => clearTimeout(timer) },[value])
+  return debounced
+}
+function AggregateList({scope,kind,query,ownersQ,repoOptions = [],repoDiscoveryError,active = true,onOpen}) {
+  const state = useValue(kind === 'prs' ? $prState : $issueState)
+  const filters = useValue(githubShellStore.aggregateFilters)
+  const search = useAggregateDebounce(query)
+  const repoFilter = useAggregateDebounce(filters.repo)
+  const scopeOwner = aggregateScope(scope)?.owner
+  const owners = (ownersQ.data?.owners || []).filter(o => !scopeOwner || o.login.toLowerCase() === scopeOwner.toLowerCase())
+  const options = {owners,kind,state,query:search,viewer:ownersQ.data?.viewer,filters:{...filters,repo:repoFilter,review:kind === 'prs' && filters.review}}
+  const key = [ID,'aggregate',scope,kind,state,search,options.filters,ownersQ.data?.viewer,owners.map(o => o.login)]
+  let validation = ''
+  try { if (ownersQ.data) buildAggregateRequest(options) } catch (error) { validation = error.message }
+  if (ownersQ.data && !owners.length) validation = 'Selected owner is not in the authenticated membership inventory. Check organization access and Refresh.'
+  const q = useQuery({queryKey:key,enabled:active && !!ownersQ.data && !validation,queryFn:() => fetchAggregatePage(options),staleTime:60_000,retry:false,refetchOnWindowFocus:false})
+  const more = useMutation({mutationFn:async ({options,key,data}) => {
+    const next = await fetchAggregatePage(options,data)
+    queryClient.setQueryData(key,next)
+  }})
+  const change = update => githubShellStore.aggregateFilters.set({...filters,...update})
+  const ownerOptions = (ownersQ.data?.owners || []).filter(o => !scopeOwner || o.login.toLowerCase() === scopeOwner.toLowerCase())
+  const repoOptionsOwned = repoOptions.filter(r => ownerOptions.some(o => o.login.toLowerCase() === r.split('/')[0].toLowerCase()) && (!filters.owner || r.split('/')[0].toLowerCase() === filters.owner.toLowerCase()))
+  const controlStyle = {background:'var(--ui-bg-editor)',color:'var(--ui-text-primary)',border:'1px solid var(--ui-stroke-secondary)',borderRadius:6,padding:'4px 6px',fontSize:11,minWidth:0}
+  const notices = [...(ownersQ.data?.notices || []),...(q.data?.notices || []),...(repoDiscoveryError ? ['Single-repo discovery failed. Combined owner search remains available; Repo filter options may be incomplete. Check gh authorization and Refresh.'] : [])]
+  return jsxs('div',{className:'flex h-full min-h-0 flex-col',children:[
+    jsxs('div',{className:'shrink-0 p-3 border-b border-(--ui-stroke-secondary)',children:[
+      jsxs('div',{className:'flex flex-wrap gap-2',children:[
+        jsx('select',{'aria-label':'Owner filter',value:filters.owner,style:controlStyle,onChange:e => change({owner:e.target.value,repo:''}),children:[jsx('option',{value:'',children:'All owners'},'all'),...ownerOptions.map(o => jsx('option',{value:o.login,children:o.login},o.login))]}),
+        jsx('select',{'aria-label':'Repo filter',value:filters.repo,style:{...controlStyle,maxWidth:'100%'},onChange:e => change({repo:e.target.value}),children:[jsx('option',{value:'',children:'All repos'},'all'),...repoOptionsOwned.map(r => jsx('option',{value:r,children:r},r))]}),
+        ...[['assigned','Assigned to me'],['authored','Authored by me'],...(kind === 'prs' ? [['review','Review requested']] : []),['forks','Include forks']].map(([field,label]) => jsxs('label',{className:'inline-flex items-center gap-1 text-[11px] text-(--ui-text-secondary)',children:[jsx('input',{type:'checkbox',checked:!!filters[field],onChange:e => change({[field]:e.target.checked})}),label]},field)),
+      ]}),
+      jsx('p',{className:'mt-2 text-[10px] text-(--ui-text-tertiary)',children:'Own user + member organizations only • archived excluded • 60 s cache • search calls paced'}),
+      jsx('p',{className:'mt-1 text-[10px] text-(--ui-text-tertiary)',children:'Only repositories visible to gh are searchable. SSO/OAuth may hide private results silently; verify token and organization authorization if an owner looks incomplete.'}),
+      ...notices.map(notice => jsx('p',{role:'status',className:'mt-2 text-[11px] text-(--ui-yellow)',children:notice},notice)),
+      jsx(Button,{variant:'ghost',size:'sm',disabled:q.isFetching || more.isPending || ownersQ.isFetching,onClick:() => {more.reset();ownersQ.refetch();q.refetch()},children:'Refresh combined list'}),
+    ]}),
+    jsx(ScrollArea,{className:'min-h-0 flex-1',children:jsxs('div',{className:'gh-list',children:[
+      ownersQ.isError ? jsx(GhErrorState,{title:'Could not discover your owners',error:ownersQ.error,onRetry:() => ownersQ.refetch()}) : null,
+      validation ? jsx('p',{role:'alert',className:'p-3 text-xs text-(--ui-yellow)',children:validation}) : null,
+      (q.isLoading || ownersQ.isLoading) && !validation ? jsx(ListSkeleton,{}) : null,
+      q.isError ? jsx(GhErrorState,{title:'Could not refresh combined list',error:q.error,onRetry:() => q.refetch()}) : null,
+      more.isError ? jsx(GhErrorState,{title:'Could not load the next page',error:more.error,onRetry:() => more.mutate({options,key,data:q.data})}) : null,
+      q.data && !validation ? jsx('div',{className:'gh-list-heading text-[10px]',children:`${kind === 'prs' ? 'Pull requests' : 'Issues'} • ${q.data.rows.length} loaded • updated newest first`}) : null,
+      ...(validation ? [] : q.data?.rows || []).map(item => jsxs('div',{className:'gh-list-row flex items-start gap-2 px-3 py-2.5',onClick:() => onOpen(item),children:[
+        jsx(Avatar,{login:item.author?.login,size:24}),
+        jsxs('div',{className:'min-w-0 flex-1',children:[
+          jsx('button',{type:'button',className:'gh-row-open w-full text-left','aria-label':`Open ${item.repo}#${item.number}`,children:jsx(ItemTitle,{title:item.title,number:item.number})}),
+          jsxs('div',{className:'mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-(--ui-text-tertiary)',children:[
+            jsx('span',{className:'gh-status-chip gh-owner-chip',title:item.repo,children:jsx(RepoLabel,{repo:item.repo,size:16})}),
+            jsx('span',{children:item.state.toLowerCase()}),
+            item.author?.login ? jsx('button',{type:'button',className:'gh-filter-token',onClick:event => setListFilter(event,'author',item.author.login),children:`@${item.author.login}`}) : null,
+            ...item.labels.map(label => jsx(LabelChip,{label,onClick:event => setListFilter(event,'label',label.name)},label.name)),
+            jsx('span',{children:ago(item.updatedAt)}),
+            kind === 'prs' ? jsx(DiffCount,{add:item.additions,del:item.deletions}) : null,
+            kind === 'prs' ? jsx('span',{children:`${item.changedFiles ?? 0} files`}) : null,
+            kind === 'prs' ? jsx('span',{className:'font-mono',children:item.headRefName}) : null,
+            kind === 'prs' ? jsx(StatusDots,{pr:item}) : null,
+          ]}),
+        ]}),
+        jsx(Codicon,{name:'chevron-right',className:'gh-card-arrow','aria-hidden':true}),
+      ]},`${item.repo.toLowerCase()}#${item.number}`)),
+      q.data && !q.data.rows.length && !validation ? jsx('p',{className:'p-3 text-xs',children:'No matching results in the accessible owned scope.'}) : null,
+      q.data?.hasMore && !validation ? jsx(Button,{variant:'outline',size:'sm',disabled:more.isPending || q.isFetching,onClick:() => more.mutate({options,key,data:q.data}),children:more.isPending ? 'Loading…' : 'Mehr laden'}) : null,
+    ]})}),
+  ]})
+}
+
 function AssignToBot({ kind, repo, number }) {
   const [open, setOpen] = useState(false)
   // Issue #60: session.create needs cwd to land the bot in the checked-out
@@ -3530,6 +3834,7 @@ function PrDetail({ repo, number, onBack, active = true }) {
               queryClient.invalidateQueries({ queryKey: [ID, 'pr-conv', repo, n] }),
               queryClient.invalidateQueries({ queryKey: [ID, 'pr-page', repo, n] }),
               queryClient.invalidateQueries({ queryKey: [ID, 'prs', repo] }),
+              queryClient.invalidateQueries({ queryKey: [ID, 'aggregate'] }),
             ])
             window.setTimeout(() => convEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 0)
           },
@@ -3596,6 +3901,7 @@ function IssueDetail({ repo, number, onBack, active = true }) {
           await Promise.all([
             queryClient.invalidateQueries({ queryKey: [ID, 'issue-detail', repo, n] }),
             queryClient.invalidateQueries({ queryKey: [ID, 'issues', repo] }),
+            queryClient.invalidateQueries({ queryKey: [ID, 'aggregate'] }),
           ])
           window.setTimeout(() => convEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), 0)
         },
@@ -3628,6 +3934,7 @@ function SessionPrBanner() {
 
 function useGitHubShellState() {
   const reposQ = useRepos()
+  const ownersQ = useQuery({queryKey:[ID,'aggregate-owners'],queryFn:() => loadAggregateOwners(),staleTime:60_000,retry:false})
   const repo = useValue($repo)
   const tab = useValue($tab)
   const query = useValue($listQuery)
@@ -3657,17 +3964,18 @@ function useGitHubShellState() {
 
   useEffect(() => {
     const sessionRepo = gitQ.data?.repo
+    if (!repo && aggregateScope(savedRepo)) { $repo.set(savedRepo); return }
     if (sessionRepo) {
       // Follow the session's repo; a manual pick stands until it changes again.
       if (sessionRepo !== githubShellStore.lastAutoRepo) {
         githubShellStore.lastAutoRepo = sessionRepo
-        if (sessionRepo !== repo) $repo.set(sessionRepo)
+        if (sessionRepo !== repo && !aggregateScope(repo)) $repo.set(sessionRepo)
       }
     } else if (gitQ.data) {
       githubShellStore.lastAutoRepo = null // cwd resolved with no repo: re-arm auto-follow
     } else if (!repo && (reposQ.data || savedRepo)) {
       // Prefer persisted repo even when it sits outside gh's first 30 (#56).
-      if (savedRepo && repoOk(savedRepo)) $repo.set(savedRepo)
+      if (savedRepo && (repoOk(savedRepo) || aggregateScope(savedRepo))) $repo.set(savedRepo)
       else if (repoOptions[0]) $repo.set(repoOptions[0])
     }
   }, [reposQ.data, gitQ.data, repo, savedRepo, repoOptions])
@@ -3685,11 +3993,12 @@ function useGitHubShellState() {
       const reset = resolveRepoReset(suppressRepoResetFor, repo)
       suppressRepoResetFor = reset.armed
       if (!reset.keepSelection) { $selPr.set(null); $selIssue.set(null) }
+      githubShellStore.aggregateFilters.set({owner:'',repo:'',assigned:false,authored:false,review:false,forks:false})
     }
     prevRepo.current = repo
   }, [repo])
 
-  return { reposQ, repo, repoOptions, tab, query, selPr, selIssue }
+  return { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue }
 }
 
 function useListKeyboardFlow(query) {
@@ -3715,18 +4024,18 @@ function useListKeyboardFlow(query) {
 }
 
 function GitHubPane() {
-  const { reposQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
+  const { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
   const paneVisible = useValue(paneVisibleAtom())
   const keyboard = useListKeyboardFlow(query)
 
   const showPr = tab === 'prs' && selPr != null
   const showIssue = tab === 'issues' && selIssue != null
 
-  if (showPr) return jsx(PrDetail, { repo, number: selPr, active: paneVisible, onBack: () => $selPr.set(null) })
-  if (showIssue) return jsx(IssueDetail, { repo, number: selIssue, active: paneVisible, onBack: () => $selIssue.set(null) })
+  if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, active: paneVisible, onBack: () => $selPr.set(null) })
+  if (showIssue) return jsx(IssueDetail, { repo:selIssue.repo || repo, number:selIssue.number || selIssue, active: paneVisible, onBack: () => $selIssue.set(null) })
 
-  if (reposQ.isError) {
-    return jsx('div', { className: 'p-6', children: jsx(GhErrorState, { title: 'Could not load repositories', error: reposQ.error, onRetry: () => reposQ.refetch() }) })
+  if (reposQ.isError && !aggregateScope(repo)) {
+    return jsxs('div', { className: 'p-6', children: [jsx(RepoPicker, {repos:repoOptions,owners:ownersQ.data?.owners,value:repo,onChange:v => $repo.set(v)}), jsx(GhErrorState, { title: 'Could not load repositories', error: reposQ.error, onRetry: () => reposQ.refetch() })] })
   }
 
   return jsxs('div', {
@@ -3742,7 +4051,7 @@ function GitHubPane() {
             children: [
               reposQ.isLoading
                 ? jsx(Skeleton, { className: 'h-8 flex-1 rounded-md' })
-                : jsx('div', { className: 'min-w-0 flex-1', children: jsx(RepoPicker, { repos: repoOptions, value: repo, onChange: v => $repo.set(v) }) }),
+                : jsx('div', { className: 'min-w-0 flex-1', children: jsx(RepoPicker, { repos: repoOptions, owners:ownersQ.data?.owners, value: repo, onChange: v => $repo.set(v) }) }),
               jsx(Button, { variant: 'ghost', size: 'sm', className: 'h-7 w-7 p-0 ml-auto', onClick: () => queryClient.invalidateQueries({ queryKey: [ID] }), 'aria-label': 'Refresh GitHub data', children: jsx(icons.RefreshCw, { className: 'size-3' }) }),
             ],
           }),
@@ -3760,7 +4069,7 @@ function GitHubPane() {
                 'aria-label': `Search ${tab === 'prs' ? 'pull requests' : 'issues'}`,
                 containerClassName: 'min-w-0 flex-1',
                 inputClassName: 'flex-1',
-                placeholder: 'Filter by title, #number, author, branch or label',
+                placeholder: aggregateScope(repo) ? 'Search text or owner/repo#42' : 'Filter by title, #number, author, branch or label',
                 value: query,
                 onChange: value => $listQuery.set(value),
                 inputRef: keyboard.searchRef,
@@ -3773,24 +4082,24 @@ function GitHubPane() {
       jsx('div', {
         className: 'flex-1 min-h-0',
         children: tab === 'prs'
-          ? jsx(PrList, { repo, query, active: paneVisible, onOpen: n => $selPr.set(n) })
-          : jsx(IssueList, { repo, query, active: paneVisible, onOpen: n => $selIssue.set(n) }),
+          ? aggregateScope(repo) ? jsx(AggregateList, {scope:repo,kind:tab,query,ownersQ,repoOptions,repoDiscoveryError:reposQ.error,active:paneVisible,onOpen:item => $selPr.set({repo:item.repo,number:item.number})}) : jsx(PrList, { repo, query, active: paneVisible, onOpen: n => $selPr.set(n) })
+          : aggregateScope(repo) ? jsx(AggregateList, {scope:repo,kind:tab,query,ownersQ,repoOptions,repoDiscoveryError:reposQ.error,active:paneVisible,onOpen:item => $selIssue.set({repo:item.repo,number:item.number})}) : jsx(IssueList, { repo, query, active: paneVisible, onOpen: n => $selIssue.set(n) }),
       }),
     ],
   })
 }
 
 function GithubPage() {
-  const { reposQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
+  const { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
   const keyboard = useListKeyboardFlow(query)
 
   const showPr = tab === 'prs' && selPr != null
   const showIssue = tab === 'issues' && selIssue != null
-  if (showPr) return jsx(PrDetail, { repo, number: selPr, onBack: () => $selPr.set(null) })
-  if (showIssue) return jsx(IssueDetail, { repo, number: selIssue, onBack: () => $selIssue.set(null) })
+  if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, onBack: () => $selPr.set(null) })
+  if (showIssue) return jsx(IssueDetail, { repo:selIssue.repo || repo, number:selIssue.number || selIssue, onBack: () => $selIssue.set(null) })
 
-  if (reposQ.isError) {
-    return jsx('div', { className: 'mx-auto w-full max-w-[1020px] p-6', children: jsx(GhErrorState, { title: 'Could not load repositories', error: reposQ.error, onRetry: () => reposQ.refetch() }) })
+  if (reposQ.isError && !aggregateScope(repo)) {
+    return jsxs('div', { className: 'mx-auto w-full max-w-[1020px] p-6', children: [jsx(RepoPicker, {repos:repoOptions,owners:ownersQ.data?.owners,value:repo,onChange:v => $repo.set(v)}), jsx(GhErrorState, { title: 'Could not load repositories', error: reposQ.error, onRetry: () => reposQ.refetch() })] })
   }
 
   return jsxs('div', {
@@ -3808,14 +4117,14 @@ function GithubPage() {
                 className: 'flex items-center gap-2',
                 children: [
                   jsxs('span', { className: 'flex items-center gap-2 text-sm font-semibold', children: [jsx(Codicon, { name: 'github' }), 'GitHub'] }),
-                  jsx('span', { className: 'text-xs text-(--ui-text-quaternary)', children: repo || '—' }),
+                  jsx('span', { className: 'text-xs text-(--ui-text-quaternary)', children: scopeLabel(repo) || '—' }),
                   jsx(Button, { variant: 'ghost', size: 'sm', className: 'ml-auto h-7 w-7 p-0', onClick: () => queryClient.invalidateQueries({ queryKey: [ID] }), 'aria-label': 'Refresh', children: jsx(icons.RefreshCw, { className: 'size-3' }) }),
                   jsx(Button, { variant: 'ghost', size: 'sm', className: 'h-7 px-2 text-xs', onClick: openGithubPane, children: 'Open pane' }),
                 ],
               }),
               reposQ.isLoading
                 ? jsx(Skeleton, { className: 'h-8 w-full max-w-[420px] rounded-md' })
-                : jsx('div', { className: 'max-w-[420px]', children: jsx(RepoPicker, { repos: repoOptions, value: repo, onChange: v => $repo.set(v) }) }),
+                : jsx('div', { className: 'max-w-[420px]', children: jsx(RepoPicker, { repos: repoOptions, owners:ownersQ.data?.owners, value: repo, onChange: v => $repo.set(v) }) }),
               jsx(SegmentedControl, {
                 value: tab,
                 onChange: v => $tab.set(v),
@@ -3829,7 +4138,7 @@ function GithubPage() {
                     'aria-label': `Search ${tab === 'prs' ? 'pull requests' : 'issues'}`,
                     containerClassName: 'min-w-0 flex-1',
                     inputClassName: 'flex-1',
-                    placeholder: 'Filter by title, #number, author, branch or label',
+                    placeholder: aggregateScope(repo) ? 'Search text or owner/repo#42' : 'Filter by title, #number, author, branch or label',
                     value: query,
                     onChange: value => $listQuery.set(value),
                     inputRef: keyboard.searchRef,
@@ -3844,8 +4153,8 @@ function GithubPage() {
       jsx('div', {
         className: 'mx-auto flex w-full max-w-[1020px] flex-1 min-h-0 flex-col px-2 py-2 sm:px-6 sm:py-3',
         children: tab === 'prs'
-          ? jsx(PrList, { repo, query, onOpen: n => $selPr.set(n) })
-          : jsx(IssueList, { repo, query, onOpen: n => $selIssue.set(n) }),
+          ? aggregateScope(repo) ? jsx(AggregateList, {scope:repo,kind:tab,query,ownersQ,repoOptions,repoDiscoveryError:reposQ.error,onOpen:item => $selPr.set({repo:item.repo,number:item.number})}) : jsx(PrList, { repo, query, onOpen: n => $selPr.set(n) })
+          : aggregateScope(repo) ? jsx(AggregateList, {scope:repo,kind:tab,query,ownersQ,repoOptions,repoDiscoveryError:reposQ.error,onOpen:item => $selIssue.set({repo:item.repo,number:item.number})}) : jsx(IssueList, { repo, query, onOpen: n => $selIssue.set(n) }),
       }),
     ],
   })

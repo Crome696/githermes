@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import * as plugin from '../desktop/plugin.js'
 
 const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
-const useReposSource = source.slice(source.indexOf('function useRepos() {'), source.indexOf('// Behind count only changes'))
+const useReposSource = source.slice(source.indexOf('function useRepos() {'), source.indexOf('// Combined scopes deliberately'))
 const personal = Array.from({ length: 131 }, (_, i) => `sample-owner/repository-${String(i).padStart(3, '0')}`)
 const allRepos = [...personal, 'sample-org/private-team-project']
 
