@@ -39,6 +39,7 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 
 - Hermes Desktop 0.21.7 or newer (audited SDK floor; see verification limits below)
 - [`gh`](https://cli.github.com/) installed and authenticated (`gh auth status`)
+- **Fix failing checks:** Python 3.8+ available as `python3` or `python` on the connected host, for secret-safe log collection.
 - **Windows:** [Git for Windows](https://gitforwindows.org/) (Git Bash and its POSIX tools), plus `gh` on the PATH inherited by Hermes. WSL's `C:\Windows\System32\bash.exe` is not a substitute.
 
 ### Windows shell setup and recovery
@@ -94,6 +95,65 @@ repository access (`repo` for a classic OAuth/PAT credential, or the appropriate
 repository selection and permissions for a fine-grained token). Organization
 OAuth restrictions, SAML SSO authorization and administrator approval still apply;
 this plugin cannot bypass them or expose repositories the account cannot access.
+
+## Fix failing checks
+
+Open **Fix failing checks** from a PR detail, repository list or combined list.
+The action appears only for completed `FAILURE`, `TIMED_OUT`, `CANCELLED` or
+`ACTION_REQUIRED` checks, or external `FAILURE`/`ERROR` statuses. Pending,
+successful, neutral and skipped checks do not enable it. The dialog keeps the
+existing issue/PR queue selection and shows failed-check links, the shared
+profile/model/Reasoning/Fast controls, **Nur analysieren, nicht pushen**, and the
+exact Goal preview. Forks force analysis-only mode.
+
+The read-only collector follows all current-head check, status, Actions-job and
+relevant Renovate-comment pages, rather than the timeline's five-page window.
+Actions evidence must match the PR head and linked failed job; `gh run view
+<run-id> --job <job-id> --log-failed` supplies failed-step logs. External evidence
+includes check output title/summary/text or status description, plus relevant
+Renovate artifact comments. Each excerpt contains error lines with two preceding
+and three following lines, or an explicit unavailable-log notice. Excerpts are
+UTF-8-safe, limited to 4,096 bytes each and 32,768 bytes total, shared fairly
+between failed checks. Oversized metadata blocks the Goal instead of dropping
+checks silently.
+
+Raw CLI output stays in the collector's memory. Credential-shaped values,
+authorization headers, signed URL parameters and multiline private keys are
+masked before the plugin's remote transport files, local receipts, preview or
+Goal serialization. This mandatory scrub does not depend on the gateway's
+redaction switch: the gateway cannot inspect the hex carrier. It cannot identify
+every arbitrary unlabelled secret; do not log credentials in CI. Untrusted text
+is JSON data with Unicode separators escaped, never a native Goal contract field.
+
+Fix runs use the existing native Session/Goal handoff state machine, fresh
+profile catalogs and configuration readback. A repository/PR/head identity has
+one receipt across repeated clicks and reloads. Changed settings cannot resume
+that Session as a new configuration; a new head can start a new run. Ambiguous
+creation or kickoff responses require checking the existing Session, not blind
+replay. Issue, PR and Fix receipts remain separate and share the handoff lock.
+The head and fork origin are refreshed immediately before creation and kickoff.
+
+The Goal asks the model to reproduce and minimally repair the failure, keep all
+checks/tests intact, run relevant checks, recheck the head before a normal push,
+then wait for the new head's checks. Analysis-only, fork, stale-head and unclear
+cause paths prohibit a push. A separately approved necessary rebase may use
+`--force-with-lease`; the Fix Goal never authorizes a merge. These future model
+actions are Goal constraints, not a deterministic Git executor.
+
+The pane distinguishes confirmed handoff, native Session `working`/`waiting`
+facts and current-head GitHub checks. It never labels a kickoff as a completed
+repair or push. A new head's push attribution is unknown; only a nonempty,
+fully successful check set is shown as successful. Missing, pending, neutral
+or skipped checks are not all green. **Fix-Session öffnen** remains available
+for the actual analysis, tool approvals and model result.
+
+Verification exercises the shipped public handoff and collector boundaries,
+registered native Session/config/Goal/progress handlers in an isolated home,
+and production PR list/detail/combined components in Mullvad Light/Dark at
+wide/narrow viewports. Browser host/profile/theme data and kickoff acknowledgments
+are synthetic. Historical read-only Actions logs separately verify the real CLI;
+they are not current-head freshness proof. No productive model turn, push or
+live GitHub mutation is claimed by these local checks.
 
 ## Cross-repository issue queue and persistent Goal
 
