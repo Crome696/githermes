@@ -218,11 +218,14 @@ do not blindly create another Session/Goal/kickoff. Ambiguous outcomes require
 inspection of the existing Session. Clearing selection does not cancel a Goal.
 
 Sequencing, reviews, rebase and merge are **model-directed contracts**, not a
-new deterministic executor. Automated tests and mounted Mullvad component
-fixtures do not establish actual GitHub review/merge/rebase acceptance. Those
-mutations need an explicitly authorized disposable target; native Desktop
-loading and productive model work remain separate gates. The accepted Windows
-Git-for-Windows Bash transport is unchanged.
+new deterministic executor. Accepted pre-merge verification for this PR-queue
+implementation consists of local regressions, mounted component/handler
+checks, isolated native Goal persistence and required current-head CI.
+Productive GitHub review/rebase/merge and native Desktop/model tests are
+supplementary runtime validation, not additional pre-merge gates; they remain
+unverified until actually exercised. Mutating test fixtures still need an
+explicitly authorized disposable target. Required checks, branch protection,
+review gates and the accepted Windows Git-for-Windows Bash transport are unchanged.
 
 ## Combined user / organization view
 
