@@ -7,7 +7,7 @@ import * as plugin from '../desktop/plugin.js'
 
 const selected = () => [['octocat/Hello-World', 42], ['github/sdk', 42], ['OCTOCAT/Hello-World', 27], ['github/sdk', 26]].reduce((d, [repo, number]) => plugin.updateGlobalIssueQueue(d, { type: 'toggle', item: { repo, number, title: `Issue ${number}`, state: 'OPEN' } }), plugin.emptyGlobalIssueQueue())
 const options = (draft, values) => plugin.updateGlobalIssueQueue(draft, { type: 'options', options: values })
-const defaults = { profile: '', strategy: 'squash', autoMerge: false, onError: 'stop', repositoryExecution: 'sequential', refinementAllowed: false, blockOnIssue: true }
+const defaults = { model: '', reasoning: '', fast: '', profile: '', strategy: 'squash', autoMerge: false, onError: 'stop', repositoryExecution: 'sequential', refinementAllowed: false, blockOnIssue: true }
 
 test('new Goal options have safe defaults and migrate old global and per-repo drafts without consent', () => {
  assert.deepEqual(plugin.emptyGlobalIssueQueue().options, defaults)

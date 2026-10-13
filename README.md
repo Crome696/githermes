@@ -127,6 +127,46 @@ for every selected issue, linked to this session. It **does not** add a GitHub
 assignee named after the local profile, or perform a GitHub assignment mutation.
 The mapping is saved only after Goal verification and an accepted kickoff.
 
+### Queue execution settings (Issue and PR Goals)
+
+Both queues share **Ausführung**, **Ablauf** and **Merge** groups, collapsed
+section help and a separate prompt preview. A single state element reports the
+Goal handoff; the existing Session link appears only after creation. The short
+risk notice stays visible. Controls wrap at narrow widths and use Hermes UI tokens.
+
+**Modell**, **Reasoning** and **Fast-Modus** default to **Profil-Standard**:
+GitHermes sends no override for an inherited field. Models and capability flags
+come from the selected profile's native `model.options` response, never a plugin
+model catalog. Profile changes reset all three picks; model changes reset
+Reasoning/Fast. Missing or stale models block creation rather than selecting a
+replacement. Old Issue/PR drafts inherit the missing fields without losing items
+or options, and unchanged default plans retain their existing receipt fingerprints.
+
+Hermes `41cd7b649d0980c57620035af736f91be10dae79` accepts per-Session
+`model`/`provider`, `reasoning_effort` and `fast` in `session.create`.
+`fast: false` explicitly pins normal service; omission inherits the profile.
+GitHermes revalidates explicit picks against a fresh profile catalog before
+creation, verifies the returned model/provider and reads the actual Session
+Reasoning/Fast pins with `config.get` before Goal dispatch and again before kickoff.
+A mismatch prevents model work, retains the receipt and retries the same Session.
+The native Lazy-Resume response can report the profile model rather than the pin;
+if that response cannot confirm the selected route, retry stops safely.
+No profile-global settings are written.
+
+The audited `model.options` contract returns Reasoning/Fast booleans but explicitly
+omits supported effort arrays. The Reasoning picker therefore uses the audited
+native `codex_supported_efforts` vocabulary only for confirmed OpenAI-Codex routes;
+it offers no clamped `ultra` step. Other or unknown vocabularies remain disabled
+with an explanation, as do unsupported Fast/Reasoning capabilities. Their defaults
+continue to inherit the profile. This is a capability limitation, not a claim that
+other providers lack reasoning.
+
+Local verification uses the registered native Session/config handlers in an
+isolated home without model turns, plus mounted production Queue editors and
+actual SDK primitives in Mullvad Light/Dark at wide/narrow iframe viewports.
+The browser RPC/profile/theme data are synthetic; this does not establish native
+Desktop docking, productive queue execution or GitHub review/merge behavior.
+
 The live preview and submitted Goal use the same option-dependent plan. The
 numbered prompt requests issue/comments review, code analysis, implementation,
 real checks, and a separate PR with a `Closes owner/repo#N` reference per issue.
