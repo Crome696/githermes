@@ -70,9 +70,9 @@ test('all 32 policy combinations preserve refinement permissions, blocker scope 
    assert.match(prompt, /im sequenziellen Modus bleibt die globale Auswahlreihenfolge verbindlich/)
   }
   assert.match(prompt, autoMerge ? /tatsächlich grünen erforderlichen Checks am aktuellen PR-Head/ : /Nicht mergen und kein Auto-Merge aktivieren/)
-  assert.match(prompt, /Profilregeln und erforderliche Freigaben bleiben gültig|Bestehende Profilregeln und Merge-Freigaben bleiben gültig/)
+  assert.match(prompt, autoMerge ? /Alle übrigen Profilregeln, erforderliche unabhängige Reviews/ : /Bestehende Profilregeln und Merge-Freigaben bleiben gültig/)
   assert.match(prompt, onError === 'skip' ? /nicht blockierenden Bearbeitungsfehler/ : /Diese Fehlerregel gilt unabhängig von Block on issue/)
-  if (onError === 'skip') assert.match(prompt, /fehlgeschlagene erforderliche Checks und offene Review-\/Freigaben sind Blocker, keine überspringbaren Fehler/)
+  if (onError === 'skip') assert.match(prompt, /weiterhin fehlgeschlagene erforderliche Checks nach erfolgloser zulässiger Reparatur und tatsächlich ausstehende erforderliche Reviews\/Erlaubnisse sind Blocker, keine überspringbaren Fehler/)
   assert.match(prompt, /keine neuen Aufgaben ohne ausgewähltes Issue außerhalb des genehmigten Umfangs/i)
   assert.match(prompt, /keine GitHub-Assignees nach lokalen Profilnamen ändern/)
  }
