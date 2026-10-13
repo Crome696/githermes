@@ -182,6 +182,48 @@ Desktop loading and user-run model work remain separate acceptance boundaries.
 See the official [Persistent Goals documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/goals/).
 The existing Windows Git Bash transport is retained.
 
+## Cross-repository PR queue
+
+Select open PRs in individual or combined lists. The PR queue has its own
+`globalPrQueue` storage; issue drafts and issue Goal receipts are preserved.
+Selection order survives scope/filter changes and reloads. Up/Down buttons,
+checkboxes, removal and clear-selection are keyboard accessible. PR detail
+navigation is locked while PR selection is nonempty.
+
+Choose a profile (current profile by default), merge strategy (squash), conflict
+policy (ignore), error policy (stop), and review result (comment-only). **Reviewen**
+creates a native profiled Session/Goal and submits its returned kickoff. Opt-in
+review decisions request approve/request changes; own PRs receive comments only.
+
+**Reviewte mergen · Vorschau** performs read-only, uncapped paginated reads of
+PR state, effective branch rules/protection, reviews and exact-head check runs
+and statuses. The preview lists merge candidates, reasoned skips, conditional
+conflict fixes and unknown blockers. Confirming it creates a separate merge
+Goal; preview alone never starts model work or mutates GitHub. Extra protection
+rules that the preview cannot prove satisfied block confirmation conservatively.
+Missing/unknown permissions, protection or check data are never approval.
+
+The merge Goal requests fresh eligibility before each mutation, exact-head
+`--match-head-commit`, the selected strategy and `--delete-branch`, without admin
+or auto-merge bypass. It must refresh every remaining PR after a merge. Ignore
+mode leaves conflicts untouched. Rebase-and-fix mode is same-repo only, with an
+explicit old-head force-with-lease, local checks, new-head Required Checks and
+fresh valid review; unresolved conflicts stop without pushing. Fork conflicts
+are skipped with a reason. Existing profile/user approvals remain required.
+
+The PR start shares the issue submission state machine but uses separate
+`prQueueGoalSubmission`, PR assignment identities and completed-action receipts.
+Repeated clicks, reload retries and switching back to an already started action
+do not blindly create another Session/Goal/kickoff. Ambiguous outcomes require
+inspection of the existing Session. Clearing selection does not cancel a Goal.
+
+Sequencing, reviews, rebase and merge are **model-directed contracts**, not a
+new deterministic executor. Automated tests and mounted Mullvad component
+fixtures do not establish actual GitHub review/merge/rebase acceptance. Those
+mutations need an explicitly authorized disposable target; native Desktop
+loading and productive model work remain separate gates. The accepted Windows
+Git-for-Windows Bash transport is unchanged.
+
 ## Combined user / organization view
 
 The repository picker starts with **Alle meine Repos**, followed by **Alle in
