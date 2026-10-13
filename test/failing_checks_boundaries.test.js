@@ -191,6 +191,7 @@ def run(args,**kwargs):
  elif '--log-failed' in args:
   assert '--job' in args and args[args.index('--job')+1]=='2'
   raw='CI\tSetup\tforeign successful step\nCI\tTest\tError: ghp_'+'S'*24+'\nCI\tTest\tcontext ä😀\nCI\tTest\tError: '+('é😀'*1600)+'\n'
+  raw=flags.get('raw',raw)
   return types.SimpleNamespace(returncode=0,stdout=raw.encode(),stderr=b'')
  else:out={'headSha':'b'*40 if flags.get('wrongRun') else h,'url':'https://github.com/octocat/Hello-World/actions/runs/1'}
  return types.SimpleNamespace(returncode=0,stdout=json.dumps(out).encode(),stderr=b'')
@@ -215,6 +216,21 @@ test('production collector walks beyond six pages, filters exact failed job/step
  assert.ok(s.failed.every(c=>Buffer.byteLength(c.excerpt)<=4096))
  assert.ok(s.failed.reduce((n,c)=>n+Buffer.byteLength(c.excerpt),0)<=32768)
  assert.ok(!json.includes('\ufffd'));assert.equal(s.failed[0].jobs[0].steps.length,1)
+})
+test('production collector preserves late Actions cause under fair multi-check caps without uncapped metadata copies',()=>{
+ const raw=('CI\tTest\t✔ failed-check regression passes\n').repeat(150)
+  +('CI\tTest\tfailure-handling documentation '+('ä😀'.repeat(3000))+'\n').repeat(3)
+  +'CI\tTest\tbefore-one\nCI\tTest\tbefore-two\nCI\tTest\tAssertionError [ERR_ASSERTION]: actual late cause\nCI\tTest\tafter-one\nCI\tTest\tafter-two\nCI\tTest\tafter-three\n'
+ const [s]=collector({many:true,raw})
+ assert.ok(!s.collector_error,s.collector_error)
+ const action=s.failed.find(c=>c.source==='actions')
+ for(const context of ['before-one','before-two','actual late cause','after-one','after-two','after-three'])assert.ok(action.excerpt.includes(context),context)
+ assert.equal(s.failed.length,23)
+ assert.ok(s.failed.every(c=>Buffer.byteLength(c.excerpt)<=Math.floor(32768/23)))
+ assert.ok(s.failed.reduce((n,c)=>n+Buffer.byteLength(c.excerpt),0)<=32768)
+ assert.ok(s.failed.every(c=>!Object.hasOwn(c,'summary')&&!Object.hasOwn(c,'text')))
+ assert.ok(s.failed.filter(c=>c.name?.startsWith('external ')).every(c=>c.excerpt.includes('Error:')))
+ assert.ok(!JSON.stringify(s).includes('\ufffd'))
 })
 for(const [flags,reason] of [[{stale:true},/PR head changed/],[{wrongRun:true},/Actions run head/],[{count:true},/Check count changed/]])test(`collector fails closed on ${Object.keys(flags)[0]} before emitting an executable snapshot`,()=>{
  const [error]=collector(flags);assert.match(error.collector_error,reason)

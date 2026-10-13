@@ -1837,14 +1837,66 @@ def pages(path,key=None):
     return rows
 
 def clip(text,cap):return text.encode('utf-8')[:max(0,cap)].decode('utf-8','ignore')
+def diagnostic_rank(line):
+    # Inspect the message, not the gh job/step name or timestamp. A passing
+    # test named "failed-check handling" is not a diagnostic.
+    message=line.split('\t',2)[-1] if len(line.split('\t',2))==3 else line
+    message=re.sub(r'^\d{4}-\d\d-\d\dT\S+\s*','',message).lstrip()
+    if re.match(r'(?:[✔✓]|ok\s+\d+\b|#\s*(?:tests|pass|fail|skipped)\s+\d+\b|ℹ\s*(?:tests|pass|fail|skipped)\s+\d+\b)',message):return 0
+    if re.search(r'(?i)process completed with exit code [1-9]\d*|command .*exited with (?:code |status )?[1-9]\d*',message):return 2
+    if re.search(r'(?i)##\[error\]|::error(?:\s|::)|\b(?:AssertionError|ERR_ASSERTION|ERESOLVE)\b|Traceback \(most recent call last\):',message):return 3
+    if re.match(r'(?i)(?:not ok\s+\d+\b|[✖×]|(?:npm\s+)?ERR!|(?:[\w.]*Error|[\w.]*Exception)\s*[:\[])',message):return 3
+    if re.search(r'(?i)error|fail|exception|conflict|lockfile|peer dep|timed.out',message):return 1
+    return 0
+
 def excerpt(text,cap):
-    lines=redact(text).splitlines();picked=set()
-    for i,line in enumerate(lines):
-        if re.search(r'(?i)error|fail|exception|conflict|ERESOLVE|lockfile|peer dep|##\[error\]|not ok|timed.out',line):picked.update(range(max(0,i-2),min(len(lines),i+4)))
-    if not picked:picked.update(range(min(12,len(lines))))
-    result='\n'.join(lines[i] for i in sorted(picked))
-    if len(result.encode('utf-8'))>cap:return clip(result,max(0,cap-32))+'\n[excerpt truncated]'
-    return result
+    # Redact the complete input before ranking or any byte clipping.
+    lines=redact(text).splitlines()
+    if not lines or cap<=0:return ''
+    ranks=[diagnostic_rank(line) for line in lines]
+    strongest=max(ranks)
+    candidates=[i for i,rank in enumerate(ranks) if rank==strongest] if strongest else list(range(min(12,len(lines))))
+    # Reserve a fair share per diagnostic, spanning the whole log when there
+    # are too many. Never spend the entire budget on its earliest prefix.
+    count=min(len(candidates),max(1,cap//512))
+    centers={candidates[(j*(len(candidates)-1))//(count-1)] for j in range(count)} if count>1 else {candidates[-1]}
+    picked=set()
+    for i in centers:picked.update(range(max(0,i-2),min(len(lines),i+4)))
+    gap='[lines omitted]';suffix='[excerpt truncated]';line_suffix=' [line truncated]'
+    def gaps(indices):
+        return sum(i!=previous+1 for previous,i in zip([-1]+indices,indices))+int(indices[-1]!=len(lines)-1)
+    # Tiny aggregate shares cannot hold a context group. Spend them on the
+    # diagnostic itself, with a truncation marker, not a leading gap marker.
+    if cap<128:
+        line=lines[max(centers)];marker=' [truncated]'
+        return clip(line,max(0,cap-len(marker)))+clip(marker,cap)
+    indices=sorted(picked)
+    marker_count=gaps(indices)
+    budget=max(0,cap-marker_count*(len(gap)+1)-len(suffix)-1-len(indices))
+    sizes={i:len(lines[i].encode('utf-8')) for i in indices}
+    shares={i:0 for i in indices};remaining=budget;pending=set(indices)
+    # Weighted water-filling: short context returns unused space; long early
+    # lines cannot starve a later anchor. Anchors receive four context shares.
+    while pending and remaining:
+        weight=sum(4 if i in centers else 1 for i in pending)
+        unit=max(1,remaining//weight)
+        for i in sorted(pending,key=lambda i:(i not in centers,i)):
+            take=min(sizes[i]-shares[i],unit*(4 if i in centers else 1),remaining)
+            shares[i]+=take;remaining-=take
+            if shares[i]==sizes[i]:pending.remove(i)
+            if not remaining:break
+    result=[];previous=-1;truncated=len(centers)<len(candidates)
+    for i in indices:
+        if i!=previous+1:result.append(gap)
+        size=shares[i]
+        if size<sizes[i]:
+            truncated=True
+            result.append(clip(lines[i],max(0,size-len(line_suffix)))+clip(line_suffix,size))
+        else:result.append(lines[i])
+        previous=i
+    if indices[-1]!=len(lines)-1:result.append(gap)
+    if truncated:result.append(suffix)
+    return clip('\n'.join(result),cap)
 
 pr=api('pulls/'+number)
 head=pr.get('head',{});base=pr.get('base',{});sha=head.get('sha','')
