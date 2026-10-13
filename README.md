@@ -1,5 +1,7 @@
 # GitHermes
 
+[![CI](https://github.com/Crome696/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Crome696/githermes/actions/workflows/ci.yml)
+
 GitHermes **0.6.0** — [Crome696/githermes](https://github.com/Crome696/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
@@ -281,6 +283,26 @@ and the source at that commit were checked, not a local Hermes source checkout.
 | Storage | `ctx.storage.get(key, fallback)` is synchronous JSON persistence under `hermes.plugin.<id>.`; `set`/`remove` remain available. Repository, order and assignment keys remain unchanged. The existing pane-open localStorage key is preserved. |
 | Shell/output | `tui_gateway/methods_tools.py` still returns `{stdout, stderr, code}`, redacts output and keeps the last 4,000 stdout characters. Hex chunking remains necessary; base64 is only used to carry Windows command text into Git Bash. Windows discovery now checks standard/portable Git Bash paths, keeps rejected host RPCs intact and retries uncached failures; see Windows shell setup above. |
 | Theme/CSS | All referenced `--ui-*` tokens exist in upstream `styles.css`/theme presets, including editor-surface and diff colors. The existing scoped CSS stays unchanged. Source token presence does **not** prove a disk plugin's utility classes are included in the shipped CSS or visually correct in light/dark matte/glass. |
+
+### Automated checks
+
+GitHub Actions runs `npm test` and `node --check desktop/plugin.js` on every
+pull request, every push to `main`, and manual CI dispatch. The matrix covers
+Ubuntu, Windows and macOS with Node 22 and 24; newer runs cancel older runs for
+the same ref. Run those same commands locally before opening a PR. `npm test`
+includes the `pretest` bootstrap, so no dependency installation is needed.
+Platform-specific tests execute on their matching OS and are skipped elsewhere;
+these adapter and transport tests are not live Hermes Desktop acceptance.
+
+The matrix follows the [Hermes v0.21.7 Desktop manifest](https://github.com/NousResearch/hermes-agent/blob/v0.21.7/apps/desktop/package.json),
+which supports Node `^22.22.0 || ^24.11.0 || >=26.0.0` for host tooling and pins
+Electron 40.10.2 ([embedded Node 24.15.0](https://releases.electronjs.org/release/v40.10.2)).
+Node 24 covers that embedded Node major; Node 22 retains the supported older
+host-tooling line. The plugin itself loads in Electron's Chromium renderer with
+SDK/React shims, not as a standalone Node application. This matrix tests its
+Node adapters and real shell transports, not the Electron renderer.
+There are no npm dependencies or lockfile. If dependencies are added, commit a
+`package-lock.json` and change CI installation to `npm ci` with npm caching.
 
 ### Tests and verification limits
 

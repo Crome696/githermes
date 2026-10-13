@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {exec} from 'node:child_process'
 import {promisify} from 'node:util'
+import { relocateShellArtifacts } from '../scripts/test-helpers/shell_fixture.mjs'
 const execP=promisify(exec)
 const source=readFileSync(new URL('../desktop/plugin.js',import.meta.url),'utf8')
 const transport=source.slice(source.indexOf('let bashPath = null'),source.indexOf('async function ghApiBig(')).replace(/^export /gm,'')
@@ -19,8 +20,8 @@ test('combined GraphQL input/partial-error envelope crosses the real Windows she
  const host={request:async(method,{command})=>{
   assert.equal(method,'shell.exec')
   const b64=command.match(/echo ([A-Za-z0-9+/=]+) \| tr/)
-  if(b64){const decoded=Buffer.from(b64[1],'base64').toString().replaceAll('/tmp/',posix+'/');command=command.replace(b64[1],Buffer.from(decoded).toString('base64')).replaceAll('/tmp/',posix+'/')}
-  else command=command.replaceAll('/tmp/',posix+'/')
+  if(b64){const decoded=relocateShellArtifacts(Buffer.from(b64[1],'base64').toString(),posix);command=relocateShellArtifacts(command.replace(b64[1],Buffer.from(decoded).toString('base64')),posix)}
+  else command=relocateShellArtifacts(command,posix)
   const job=execP(command,{shell:process.platform==='win32'?process.env.ComSpec:'/bin/bash',maxBuffer:2**20}).catch(e=>e);pending.push(job)
   const r=await job;if(r instanceof Error&&typeof r.code!=='number')throw r
   if((r.stdout||'').length===3800)reads++

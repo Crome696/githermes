@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
+import { relocateShellArtifacts } from '../scripts/test-helpers/shell_fixture.mjs'
 
 const execP = promisify(exec)
 const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
@@ -25,9 +26,9 @@ test('shBig/shJsonBig survive the gateway cap through the real platform shell', 
     // Keep all payload/runner artifacts in the task-owned fixture, not /tmp.
     if (command.includes('base64 -d > /tmp/gt$$.sh')) {
       const match = command.match(/echo ([A-Za-z0-9+/=]+) \| tr/)
-      const decoded = Buffer.from(match[1], 'base64').toString('utf8').replaceAll('/tmp/', `${posixRoot}/`)
-      command = command.replace(match[1], Buffer.from(decoded).toString('base64')).replaceAll('/tmp/', `${posixRoot}/`)
-    } else command = command.replaceAll('/tmp/', `${posixRoot}/`)
+      const decoded = relocateShellArtifacts(Buffer.from(match[1], 'base64').toString('utf8'), posixRoot)
+      command = relocateShellArtifacts(command.replace(match[1], Buffer.from(decoded).toString('base64')), posixRoot)
+    } else command = relocateShellArtifacts(command, posixRoot)
     const running = execP(command, { shell: process.platform === 'win32' ? process.env.ComSpec : '/bin/bash', encoding: 'utf8', maxBuffer: 2 ** 20 }).catch(error => error)
     cleanups.push(running)
     const result = await running
