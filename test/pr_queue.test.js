@@ -22,7 +22,7 @@ test('PR selection is an ordered independent persisted draft with immutable keyb
 })
 
 test('PR options validate all edits/restores/plans and do not migrate or overwrite issue drafts', async () => {
- const d = selected(), defaults = { profile: '', strategy: 'squash', conflicts: 'ignore', onError: 'stop', reviewResult: 'comment' }
+ const d = selected(), defaults = { model: '', reasoning: '', fast: '', profile: '', strategy: 'squash', conflicts: 'ignore', onError: 'stop', reviewResult: 'comment' }
  assert.deepEqual(d.options, defaults)
  for (const bad of [{ profile: '../bad' }, { profile: null }, { strategy: 'admin' }, { conflicts: 'force' }, { onError: 'ignore' }, { reviewResult: 'approve' }, { autoMerge: true }, [], JSON.parse('{"__proto__":{}}')]) {
   assert.throws(() => p.updateGlobalPrQueue(d, { type: 'options', options: bad }))
