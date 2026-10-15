@@ -10,6 +10,7 @@ import {
   issueDraftTitle,
   parseIssueDraftResponse,
   issueBodyDiff,
+  issueDraftFinalBody,
   rewriteIssueBody,
   redactIssueSecrets,
   resolveIssueDraftRepo,
@@ -48,6 +49,38 @@ test('duplicate search is scoped to open issues and title/body; body rewrite dif
   assert.equal(issueBodyDiff('old heading\nold detail\nkeep', 'new heading\nnew detail\nkeep'), '- old heading\n- old detail\n+ new heading\n+ new detail\n  keep')
   assert.equal(rewriteIssueBody('Existing scope', 'New session context'), 'Existing scope\n\n<!-- githermes:issue-draft:start -->\nNew session context\n<!-- githermes:issue-draft:end -->')
   assert.equal(rewriteIssueBody('Before\n\n<!-- githermes:issue-draft:start -->\nOld draft\n<!-- githermes:issue-draft:end -->\n\nAfter', 'New draft'), 'Before\n\n<!-- githermes:issue-draft:start -->\nNew draft\n<!-- githermes:issue-draft:end -->\n\nAfter')
+})
+
+test('Issue #13 R4: duplicate update preview and write use the same final body', async () => {
+  const cases = [
+    { name: 'without markers', existing: 'Existing scope', draft: 'Draft content', expected: 'Existing scope\n\n<!-- githermes:issue-draft:start -->\nDraft content\n<!-- githermes:issue-draft:end -->' },
+    { name: 'with markers', existing: 'Before\n\n<!-- githermes:issue-draft:start -->\nOld draft\n<!-- githermes:issue-draft:end -->\n\nAfter', draft: 'Draft content', expected: 'Before\n\n<!-- githermes:issue-draft:start -->\nDraft content\n<!-- githermes:issue-draft:end -->\n\nAfter' },
+  ]
+
+  for (const { name, existing, draft, expected } of cases) {
+    const finalBody = issueDraftFinalBody({ body: existing }, draft)
+    assert.equal(finalBody, expected, name)
+    const calls = []
+    let stored = { number: 7, title: 'Existing', body: existing }
+    await confirmedIssueWrite({
+      action: 'update', confirmed: true, repo: 'owner/repo', title: 'Existing', body: finalBody,
+      number: 7, originalTitle: 'Existing', originalBody: existing,
+      readIssue: async () => ({ ...stored }),
+      updateIssue: async (_repo, _number, _title, body) => { calls.push(body); stored.body = body },
+    })
+    assert.equal(issueBodyDiff(existing, finalBody), issueBodyDiff(existing, calls[0]), `${name}: reviewed diff must match written body`)
+    assert.equal(calls[0], finalBody, `${name}: exact reviewed body must be written`)
+  }
+})
+
+test('Issue #13 R4: switching duplicate selection replaces A context with B context', () => {
+  const draftContent = 'Draft content'
+  const bodyA = issueDraftFinalBody({ body: 'Existing issue A' }, draftContent)
+  const bodyB = issueDraftFinalBody({ body: 'Existing issue B' }, draftContent)
+  assert.match(bodyA, /Existing issue A/)
+  assert.match(bodyB, /Existing issue B/)
+  assert.doesNotMatch(bodyB, /Existing issue A/)
+  assert.equal(bodyB, 'Existing issue B\n\n<!-- githermes:issue-draft:start -->\nDraft content\n<!-- githermes:issue-draft:end -->')
 })
 
 test('duplicate search uses task content, finds a matching issue fixture, and omits template boilerplate', () => {

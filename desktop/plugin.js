@@ -47,7 +47,7 @@ import {
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
 import { buildFinalizeQuery, decodeFinalizeResponse, finalizeMarkdown, finalizePollInterval } from './finalize.js'
-import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftRepoFromMessages, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo, rewriteIssueBody } from './issue_draft.js'
+import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftFinalBody, issueDraftRepoFromMessages, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo } from './issue_draft.js'
 
 const ID = 'githermes'
 const PANE_ID = `${ID}:pane`
@@ -5113,6 +5113,8 @@ function IssueDraftPanel({ sessionRepo, chatMessages, candidate, sessionDraft, o
     }
   }, [sessionDraft])
   const safeBody = redactIssueSecrets(body)
+  const draftContent = safeBody
+  const finalBody = selected ? issueDraftFinalBody(selected, draftContent) : draftContent
   const search = async () => {
     const previousSelection = selected
     setError(''); setMessage(''); setSelected(null); setChecked(false); setBusy(true)
@@ -5141,7 +5143,7 @@ function IssueDraftPanel({ sessionRepo, chatMessages, candidate, sessionDraft, o
     try {
       const target = selected
       const result = await confirmedIssueWrite({
-        action, confirmed: true, repo, title: title.trim(), body: safeBody,
+        action, confirmed: true, repo, title: title.trim(), body: action === 'update' ? finalBody : draftContent,
         number: target?.number, originalTitle: target?.title, originalBody: target?.body || '', readIssue, createIssue, updateIssue,
       })
       setMessage(`Verified ${repo}#${result.number}: ${result.url}`)
@@ -5177,13 +5179,13 @@ function IssueDraftPanel({ sessionRepo, chatMessages, candidate, sessionDraft, o
     !completed && message ? jsx('p', { role: 'status', className: 'break-all text-xs text-(--ui-text-secondary)', children: message }) : null,
     matches.length ? jsxs('section', { className: 'space-y-2', children: [
       jsx('h3', { className: 'text-xs font-semibold', children: 'Possible open duplicates' }),
-      ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { draftEdited.current = true; setSelected(item); setTitle(redactIssueSecrets(item.title)); setBody(rewriteIssueBody(redactIssueSecrets(item.body || ''), safeBody)); setChecked(true); setError('') }, children: [
+      ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { draftEdited.current = true; setSelected(item); setTitle(redactIssueSecrets(item.title)); setChecked(true); setError('') }, children: [
         jsx('span', { className: 'font-semibold', children: `${repo}#${item.number} ${redactIssueSecrets(item.title)}` }),
         jsx('span', { className: 'mt-1 block whitespace-pre-wrap text-(--ui-text-tertiary)', children: redactIssueSecrets(item.body || '').slice(0, 2000) }),
       ] }, item.number)),
       selected ? jsxs('div', { className: 'rounded border border-(--ui-stroke-secondary) p-2', children: [
         jsx('h4', { className: 'mb-1 text-xs font-semibold', children: 'Body diff (existing → draft)' }),
-        jsx('pre', { className: 'max-h-48 overflow-auto whitespace-pre-wrap text-[10px]', children: issueBodyDiff(redactIssueSecrets(selected.body || ''), rewriteIssueBody(redactIssueSecrets(selected.body || ''), safeBody)) }),
+        jsx('pre', { className: 'max-h-48 overflow-auto whitespace-pre-wrap text-[10px]', children: issueBodyDiff(redactIssueSecrets(selected.body || ''), finalBody) }),
       ] }) : null,
     ] }) : null,
   ] })

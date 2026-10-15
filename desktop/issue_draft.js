@@ -159,6 +159,10 @@ export function rewriteIssueBody(existing, draft) {
   return body.trim() ? `${body.trimEnd()}\n\n${section}` : section
 }
 
+export function issueDraftFinalBody(selected, draftContent) {
+  return rewriteIssueBody(redactIssueSecrets(selected?.body || ''), draftContent)
+}
+
 export async function confirmedIssueWrite({ action, confirmed, repo, title, body, number, originalTitle, originalBody, readIssue, createIssue, updateIssue }) {
   if (!confirmed) throw new Error('GitHub write requires explicit confirmation')
   if (!REPO.test(String(repo || '')) || !String(title || '').trim() || !String(body || '').trim()) throw new Error('Issue draft is incomplete')
