@@ -1540,7 +1540,7 @@ export function parseDependencyTitle(title) {
     || text.match(/^(?:update|bump|upgrade)\s+(.+?)\s+to\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
   if (!match && !targetOnly) return null
   const [, name, from, to] = match || [null, targetOnly[1], null, targetOnly[2]]
-  const major = from === null ? null : Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
+  const major = /\(major\)/i.test(title) ? true : from === null ? (/\bto\s+v\d/i.test(text) ? true : null) : Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
   return { package: name.trim().replace(/^[`'" ]+|[`'" ]+$/g, ''), from, to, major, security: /\[security\]/i.test(title) }
 }
 
@@ -1565,19 +1565,64 @@ export function requestDependencyBotRebase(item, run = sh) {
   const key = `${item.repo.toLowerCase()}#${item.number}`
   if (dependencyRebaseRequests.has(key)) return dependencyRebaseRequests.get(key)
   const author = loginOf(item.author || item.user).toLowerCase()
-  const command = author === 'dependabot[bot]' ? '@dependabot rebase' : /^renovate\//i.test(String(item.headRefName || item.head?.ref || '')) || author === 'renovate[bot]' ? '@renovate rebase' : ''
+  const dependabot = author === 'dependabot[bot]'
+  const renovate = /^renovate\//i.test(String(item.headRefName || item.head?.ref || '')) || author === 'renovate[bot]'
+  const command = dependabot ? '@dependabot rebase' : renovate ? 'PR body rebase checkbox' : ''
   if (!command) return Promise.reject(new Error('Bot-Rebase für diesen PR nicht sicher bestimmbar'))
   const task = (async () => {
-    const endpoint = `${GH} api --paginate --jq ${sq(`.[].body`)} ${sq(`repos/${item.repo}/issues/${item.number}/comments?per_page=100`)}`
-    const comments = await run(endpoint)
-    if (String(comments).split('\n').includes(command)) return { status: 'already-requested', command }
+    const pullEndpoint = `repos/${item.repo}/pulls/${item.number}`
+    const lastHeadPush = Date.parse(String(await run(`${GH} api --paginate --slurp --jq ${sq('.[-1][-1].commit.committer.date')} ${sq(`${pullEndpoint}/commits?per_page=100`)}`)).trim())
+    if (!Number.isFinite(lastHeadPush)) throw new Error('Letzter PR-Head-Push konnte nicht bestimmt werden')
+    if (renovate) {
+      const getPull = () => run(`${GH} api ${sq(pullEndpoint)}`)
+      const current = JSON.parse(await getPull())
+      let body = String(current.body || '')
+      const checkboxLine = () => body.split('\n').find(line => /^\s*-\s*\[[ xX]\].*(?:rebase|renovate)/i.test(line))
+      const currentLine = checkboxLine()
+      const checked = !!currentLine && /\[x\]/i.test(currentLine)
+      if (checked) {
+        const timelineEndpoint = `${GH} api --paginate --slurp --jq ${sq('[.[][] | select(.event == "edited" and .changes.body.from != null) | {created_at, previous_body: .changes.body.from}]')} ${sq(`repos/${item.repo}/issues/${item.number}/timeline?per_page=100`)}`
+        const edits = JSON.parse(await run(timelineEndpoint))
+        const freshRequest = (Array.isArray(edits) ? edits : []).some(edit => {
+          const priorLine = String(edit.previous_body || '').split('\n').find(line => /^\s*-\s*\[ \].*(?:rebase|renovate)/i.test(line))
+          return !!priorLine && Date.parse(edit.created_at || '') > lastHeadPush
+        })
+        if (freshRequest) return { status: 'already-requested', command }
+      }
+      const patchBody = async next => run(`${GH} api --method PATCH ${sq(pullEndpoint)} -f ${sq(`body=${next}`)}`)
+      if (checked) {
+        const unchecked = body.replace(currentLine, currentLine.replace(/\[[xX]\]/, '[ ]'))
+        if (unchecked === body) throw new Error('Renovate-Rebase-Checkbox im PR-Body nicht gefunden')
+        await patchBody(unchecked)
+        body = unchecked
+      }
+      const uncheckedLine = checkboxLine()
+      const checkedBody = uncheckedLine ? body.replace(uncheckedLine, uncheckedLine.replace(/\[ \]/, '[x]')) : body
+      if (checkedBody === body) throw new Error('Renovate-Rebase-Checkbox im PR-Body nicht gefunden')
+      await patchBody(checkedBody)
+      const verified = JSON.parse(await getPull())
+      const verifiedLine = String(verified.body || '').split('\n').find(line => /^\s*-\s*\[x\].*(?:rebase|renovate)/i.test(line))
+      if (!verifiedLine) throw new Error('Rebase-Anfrage nach dem Schreiben nicht bestätigt')
+      return { status: 'requested', command }
+    }
+    const endpoint = `${GH} api --paginate --slurp --jq ${sq('[.[][] | {body, created_at}]')} ${sq(`repos/${item.repo}/issues/${item.number}/comments?per_page=100`)}`
+    const readComments = async () => {
+      const result = JSON.parse(await run(endpoint))
+      return Array.isArray(result) ? result : []
+    }
+    const comments = await readComments()
+    if (comments.some(comment => comment.body === command && Date.parse(comment.created_at || '') > lastHeadPush)) return { status: 'already-requested', command }
     await run(`${GH} api --method POST ${sq(`repos/${item.repo}/issues/${item.number}/comments`)} -f ${sq(`body=${command}`)}`)
-    const verified = await run(endpoint)
-    if (!String(verified).split('\n').includes(command)) throw new Error('Rebase-Anfrage nach dem Schreiben nicht bestätigt')
+    const verified = await readComments()
+    if (!verified.some(comment => comment.body === command && Date.parse(comment.created_at || '') > lastHeadPush)) throw new Error('Rebase-Anfrage nach dem Schreiben nicht bestätigt')
     return { status: 'requested', command }
   })().finally(() => dependencyRebaseRequests.delete(key))
   dependencyRebaseRequests.set(key, task)
   return task
+}
+
+export function dependencyMergeSelection(items = []) {
+  return new Set(items.filter(item => item.dependency?.major === false).map(queueIssueKey))
 }
 
 // Issue #58: approve only open PRs authored by someone else — gh refuses
@@ -4520,7 +4565,7 @@ function DependencyRebaseAction({ item }) {
 }
 function DependencyMergeDialog({ items, onConfirm, onClose }) {
   const dialog = useRef(null)
-  const [selected, setSelected] = useState(() => new Set(items.filter(item => !item.dependency?.major).map(queueIssueKey)))
+  const [selected, setSelected] = useState(() => dependencyMergeSelection(items))
   useEffect(() => { const element = dialog.current; element?.showModal(); return () => element?.close() }, [])
   return jsx('dialog', { ref: dialog, 'aria-label': 'Alle grünen Bot-PRs mergen', onCancel: event => { event.preventDefault(); onClose() }, style: { position: 'fixed', inset: '5%', width: '90%', maxHeight: '90%', zIndex: 100, background: 'var(--ui-bg-elevated)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', borderRadius: 8, padding: 16, overflowY: 'auto', maxWidth: 760, margin: 'auto', boxShadow: '0 8px 32px #0004' }, children: jsxs('div', { children: [
     jsx('h2', { className: 'font-semibold', children: 'Grüne Bot-PRs für die Merge-Queue auswählen' }),
