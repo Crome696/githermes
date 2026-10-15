@@ -25,6 +25,8 @@ test('finalization derives all six states, handles NOT_PLANNED closure and selec
   closed.stateReason = 'NOT_PLANNED'
   assert.equal(deriveFinalizeRow(item(), closed).state, FINALIZE_STATES.closed)
   assert.equal(deriveFinalizeRow(item(), issue(1, { state: 'CLOSED', prs: [pr(7)] }).data.i0.issue).state, FINALIZE_STATES.closed)
+  assert.equal(deriveFinalizeRow(item(), issue(1, { prs: [pr(7, 'CLOSED')] }).data.i0.issue).state, FINALIZE_STATES.open)
+  assert.equal(deriveFinalizeRow(item(), issue(1, { state: 'CLOSED', prs: [pr(7, 'CLOSED')] }).data.i0.issue).state, FINALIZE_STATES.closed)
   const selected = deriveFinalizeRow(item(), issue(1, { prs: [pr(3, 'MERGED', 'SUCCESS', '2026-01-01'), pr(4, 'OPEN')] }).data.i0.issue)
   assert.equal(selected.pr.number, 4)
 })

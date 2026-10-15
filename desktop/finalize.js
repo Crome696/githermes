@@ -42,6 +42,7 @@ export function deriveFinalizeRow(item, issue, assigned = false) {
   let state
   if (selected?.merged || selected?.state === 'MERGED') state = STATES.merged
   else if (issue?.state === 'CLOSED') state = STATES.closed
+  else if (selected?.state === 'CLOSED') state = assigned ? STATES.working : STATES.open
   else if (selected) state = ['FAILURE','ERROR'].includes(String(selected.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state || '').toUpperCase()) ? STATES.failing : STATES.pr
   else state = assigned ? STATES.working : STATES.open
   return { ...item, title: issue?.title || item.title || `#${item.number}`, url: issue?.url || `https://github.com/${item.repo}/issues/${item.number}`, state, prs: refs, pr: selected || null }

@@ -5189,14 +5189,14 @@ function useListKeyboardFlow(query) {
   return { searchRef, onKeyDown }
 }
 
-function FinalizePanel({ active }) {
+function useFinalizeQuery() {
   const receipt = useValue($queueSubmission)
   const assignments = useValue($botAssignments)
   const items = receipt?.plan?.items || []
   const stored = pluginCtx?.storage
   const key = receipt?.stored_session_id || receipt?.session_id || receipt?.fingerprint || 'none'
   const result = useQuery({
-    queryKey: [ID, 'finalize', key], enabled: !!active && items.length > 0,
+    queryKey: [ID, 'finalize', key], enabled: items.length > 0,
     queryFn: async () => {
       const batches = []
       for (let offset = 0; offset < items.length; offset += 50) {
@@ -5212,8 +5212,13 @@ function FinalizePanel({ active }) {
       return { rows, updatedAt }
     },
     initialData: stored?.get(`finalization:${key}`, undefined),
-    refetchInterval: query => active ? finalizePollInterval(query.state.data?.rows) : false,
+    refetchInterval: query => finalizePollInterval(query.state.data?.rows),
   })
+  return { receipt, items, result }
+}
+
+function FinalizePanel({ finalization }) {
+  const { receipt, items, result } = finalization
   const rows = result.data?.rows || []
   if (!items.length) return jsxs('div', { className: 'p-6', children: [jsx('h2', { className: 'text-lg font-semibold', children: 'Queue finalization' }), jsx(EmptyState, { title: 'No queue session available' })] })
   const done = rows.filter(row => !['offen', 'in Arbeit', 'PR mit Failing Checks'].includes(row.state)).length
@@ -5233,6 +5238,7 @@ function GitHubPane() {
   const { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
   const paneVisible = useValue(paneVisibleAtom())
   const showFinalize = useValue($showFinalize)
+  const finalization = useFinalizeQuery()
   const keyboard = useListKeyboardFlow(query)
 
   const prDraft = useValue($prQueue)
@@ -5240,7 +5246,7 @@ function GitHubPane() {
   const queueDraft = useValue($issueQueue)
   const showIssue = tab === 'issues' && selIssue != null && issueDetailAllowed(queueDraft)
 
-  if (showFinalize) return jsx(FinalizePanel, { active: paneVisible })
+  if (showFinalize) return jsx(FinalizePanel, { finalization })
   if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, active: paneVisible, onBack: () => $selPr.set(null) })
   if (showIssue) return jsx(IssueDetail, { repo:selIssue.repo || repo, number:selIssue.number || selIssue, active: paneVisible, onBack: () => $selIssue.set(null) })
 
