@@ -4548,7 +4548,7 @@ function AggregateList({scope,kind,query,ownersQ,repoOptions = [],repoDiscoveryE
   const repoFilter = useAggregateDebounce(filters.repo)
   const scopeOwner = aggregateScope(scope)?.owner
   const owners = (ownersQ.data?.owners || []).filter(o => !scopeOwner || o.login.toLowerCase() === scopeOwner.toLowerCase())
-  const options = {owners,kind,state,query:search,viewer:ownersQ.data?.viewer,filters:{...filters,repo:repoFilter,review:kind === 'prs' && filters.review}}
+  const options = {owners,kind,state,query:search,viewer:ownersQ.data?.viewer,filters:{...filters,repo:repoFilter,review:kind === 'prs' && filters.review,forks:kind === 'prs' && botView ? true : filters.forks}}
   const key = [ID,'aggregate',scope,kind,state,search,options.filters,ownersQ.data?.viewer,owners.map(o => o.login)]
   let validation = ''
   try { if (ownersQ.data) buildAggregateRequest(options) } catch (error) { validation = error.message }
@@ -4587,7 +4587,7 @@ function AggregateList({scope,kind,query,ownersQ,repoOptions = [],repoDiscoveryE
       jsxs('div',{className:'flex flex-wrap gap-2',children:[
         jsx('select',{'aria-label':'Owner filter',value:filters.owner,style:controlStyle,onChange:e => change({owner:e.target.value,repo:''}),children:[jsx('option',{value:'',children:'All owners'},'all'),...ownerOptions.map(o => jsx('option',{value:o.login,children:o.login},o.login))]}),
         jsx('select',{'aria-label':'Repo filter',value:filters.repo,style:{...controlStyle,maxWidth:'100%'},onChange:e => change({repo:e.target.value}),children:[jsx('option',{value:'',children:'All repos'},'all'),...repoOptionsOwned.map(r => jsx('option',{value:r,children:r},r))]}),
-        ...[['assigned','Assigned to me'],['authored','Authored by me'],...(kind === 'prs' ? [['review','Review requested']] : []),['forks','Include forks']].map(([field,label]) => jsxs('label',{className:'inline-flex items-center gap-1 text-[11px] text-(--ui-text-secondary)',children:[jsx('input',{type:'checkbox',checked:!!filters[field],onChange:e => change({[field]:e.target.checked})}),label]},field)),
+        ...[['assigned','Assigned to me'],['authored','Authored by me'],...(kind === 'prs' ? [['review','Review requested']] : []),['forks','Include forks']].map(([field,label]) => jsxs('label',{className:'inline-flex items-center gap-1 text-[11px] text-(--ui-text-secondary)',children:[jsx('input',{type:'checkbox',checked:field==='forks'&&kind==='prs'&&botView?true:!!filters[field],disabled:field==='forks'&&kind==='prs'&&botView,onChange:e => change({[field]:e.target.checked})}),label]},field)),
         kind === 'prs' ? jsx(Button,{variant:botView?'outline':'ghost',size:'sm','aria-pressed':botView,onClick:() => setBotView(value => !value),children:botView?'Alle PRs':'Bot-PRs'}) : null,
       ]}),
       botView ? jsxs('div',{className:'mt-2 flex flex-wrap items-center gap-2',children:[
