@@ -1536,9 +1536,11 @@ export function parseDependencyTitle(title) {
   const text = String(title || '').replace(/^\s*(?:\[security\]\s*)+/i, '').replace(/^[^:]+:\s*/, '')
   const match = text.match(/^(?:update|bump|upgrade)\s+(?:the\s+)?(?:dependency|package)\s+(.+?)\s+from\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)\s+(?:to|→)\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
     || text.match(/^(?:update|bump|upgrade)\s+(.+?)\s+from\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)\s+(?:to|→)\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
-  if (!match) return null
-  const [, name, from, to] = match
-  const major = Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
+  const targetOnly = text.match(/^(?:update|bump|upgrade)\s+(?:the\s+)?(?:dependency|package)\s+(.+?)\s+to\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
+    || text.match(/^(?:update|bump|upgrade)\s+(.+?)\s+to\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
+  if (!match && !targetOnly) return null
+  const [, name, from, to] = match || [null, targetOnly[1], null, targetOnly[2]]
+  const major = from === null ? null : Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
   return { package: name.trim().replace(/^[`'" ]+|[`'" ]+$/g, ''), from, to, major, security: /\[security\]/i.test(title) }
 }
 
@@ -1546,14 +1548,36 @@ export function groupDependencyPrs(rows = []) {
   const groups = { green: [], red: [], pending: [], conflict: [] }
   for (const pr of rows) {
     const check = String(pr.checkState || ciState(pr.statusCheckRollup || pr.fixStatusCheckRollup) || '').toUpperCase()
-    const conflict = isMergeConflict(pr.mergeableState || pr.mergeable_state)
+    const rawMerge = String(pr.mergeableState || pr.mergeable_state || '').toLowerCase()
+    const conflict = isMergeConflict(rawMerge) || rawMerge === 'conflicting'
     const group = conflict ? 'conflict'
       : ['FAILURE', 'FAILING', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'].includes(check) ? 'red'
-      : pr.isDraft === true || !['SUCCESS', 'PASSING'].includes(check) || !['clean', 'has_hooks', 'unstable'].includes(pr.mergeableState || pr.mergeable_state || '') ? 'pending'
+      : pr.isDraft === true || !['SUCCESS', 'PASSING'].includes(check) || !['clean', 'mergeable', 'has_hooks', 'unstable'].includes(rawMerge) ? 'pending'
       : 'green'
     groups[group].push({ ...pr, dependency: parseDependencyTitle(pr.title) })
   }
   return groups
+}
+
+const dependencyRebaseRequests = new Map()
+export function requestDependencyBotRebase(item, run = sh) {
+  if (!repoOk(item?.repo) || !Number.isSafeInteger(item.number) || item.number < 1) return Promise.reject(new Error('Ungültige PR-Identität'))
+  const key = `${item.repo.toLowerCase()}#${item.number}`
+  if (dependencyRebaseRequests.has(key)) return dependencyRebaseRequests.get(key)
+  const author = loginOf(item.author || item.user).toLowerCase()
+  const command = author === 'dependabot[bot]' ? '@dependabot rebase' : /^renovate\//i.test(String(item.headRefName || item.head?.ref || '')) || author === 'renovate[bot]' ? '@renovate rebase' : ''
+  if (!command) return Promise.reject(new Error('Bot-Rebase für diesen PR nicht sicher bestimmbar'))
+  const task = (async () => {
+    const endpoint = `${GH} api --paginate --jq ${sq(`.[].body`)} ${sq(`repos/${item.repo}/issues/${item.number}/comments?per_page=100`)}`
+    const comments = await run(endpoint)
+    if (String(comments).split('\n').includes(command)) return { status: 'already-requested', command }
+    await run(`${GH} api --method POST ${sq(`repos/${item.repo}/issues/${item.number}/comments`)} -f ${sq(`body=${command}`)}`)
+    const verified = await run(endpoint)
+    if (!String(verified).split('\n').includes(command)) throw new Error('Rebase-Anfrage nach dem Schreiben nicht bestätigt')
+    return { status: 'requested', command }
+  })().finally(() => dependencyRebaseRequests.delete(key))
+  dependencyRebaseRequests.set(key, task)
+  return task
 }
 
 // Issue #58: approve only open PRs authored by someone else — gh refuses
@@ -2373,7 +2397,7 @@ export async function loadAggregateOwners(run = shBig) {
   return { ...auth, owners }
 }
 const AGGREGATE_FIELDS = `fragment Row on Issue { number title state updatedAt url author { login } assignees(first:100) { nodes { login } pageInfo { hasNextPage } } labels(first:100) { nodes { name color } pageInfo { hasNextPage } } repository { nameWithOwner isArchived isFork owner { login } } }
-fragment PrRow on PullRequest { number title state updatedAt url author { login } assignees(first:100) { nodes { login } pageInfo { hasNextPage } } labels(first:100) { nodes { name color } pageInfo { hasNextPage } } repository { nameWithOwner isArchived isFork owner { login } } reviewRequests(first:100) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage } } isDraft additions deletions changedFiles headRefName baseRefName reviewDecision commits(last:1) { nodes { commit { statusCheckRollup { state contexts(first:100) { nodes { __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } pageInfo { hasNextPage } } } } } } }`
+fragment PrRow on PullRequest { number title state updatedAt url author { login } assignees(first:100) { nodes { login } pageInfo { hasNextPage } } labels(first:100) { nodes { name color } pageInfo { hasNextPage } } repository { nameWithOwner isArchived isFork owner { login } } reviewRequests(first:100) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage } } isDraft mergeable additions deletions changedFiles headRefName baseRefName reviewDecision commits(last:1) { nodes { commit { statusCheckRollup { state contexts(first:100) { nodes { __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } pageInfo { hasNextPage } } } } } } }`
 
 // Separate owner searches in ONE GraphQL request implement a true union. Mixed
 // user:X org:Y qualifiers (or an unverified OR expression) are never used. Alias
@@ -4483,10 +4507,42 @@ function useAggregateDebounce(value) {
   useEffect(() => { const timer = setTimeout(() => setDebounced(value),400); return () => clearTimeout(timer) },[value])
   return debounced
 }
+function DependencyRebaseAction({ item }) {
+  const [status, setStatus] = useState(''), [pending, setPending] = useState(false)
+  const request = async () => {
+    if (pending) return
+    setPending(true); setStatus('')
+    try { const result = await requestDependencyBotRebase(item); setStatus(result.status === 'requested' ? 'Rebase angefragt' : 'Rebase bereits angefragt') }
+    catch (error) { setStatus(`Rebase-Anfrage fehlgeschlagen: ${error.message || error}`) }
+    finally { setPending(false) }
+  }
+  return jsxs('span', { className: 'inline-flex items-center gap-1', children: [jsx(Button, { size: 'sm', variant: 'outline', disabled: pending, onClick: request, children: pending ? 'Anfrage…' : 'Bot-Rebase anfragen' }), status ? jsx('span', { role: 'status', children: status }) : null] })
+}
+function DependencyMergeDialog({ items, onConfirm, onClose }) {
+  const dialog = useRef(null)
+  const [selected, setSelected] = useState(() => new Set(items.filter(item => !item.dependency?.major).map(queueIssueKey)))
+  useEffect(() => { const element = dialog.current; element?.showModal(); return () => element?.close() }, [])
+  return jsx('dialog', { ref: dialog, 'aria-label': 'Alle grünen Bot-PRs mergen', onCancel: event => { event.preventDefault(); onClose() }, style: { position: 'fixed', inset: '5%', width: '90%', maxHeight: '90%', zIndex: 100, background: 'var(--ui-bg-elevated)', color: 'var(--ui-text-primary)', border: '1px solid var(--ui-stroke-secondary)', borderRadius: 8, padding: 16, overflowY: 'auto', maxWidth: 760, margin: 'auto', boxShadow: '0 8px 32px #0004' }, children: jsxs('div', { children: [
+    jsx('h2', { className: 'font-semibold', children: 'Grüne Bot-PRs für die Merge-Queue auswählen' }),
+    jsx('p', { className: 'mt-2 text-xs', children: 'Majors sind standardmäßig abgewählt. Vor dem Merge prüft die bestehende PR-Queue aktuellen Head, erforderliche Checks, Reviews und Branch-Schutz erneut.' }),
+    jsx('ul', { className: 'mt-3', children: items.map(item => {
+      const key = queueIssueKey(item), dependency = item.dependency
+      return jsxs('li', { className: 'gh-list-row p-2', children: [jsxs('label', { className: 'flex items-start gap-2', children: [jsx('input', { type: 'checkbox', checked: selected.has(key), onChange: event => setSelected(previous => { const next = new Set(previous); event.target.checked ? next.add(key) : next.delete(key); return next }) }), jsx('span', { children: `${item.repo}#${item.number} · ${dependency?.package || item.title} · ${dependency ? `${dependency.from || '?'} → ${dependency.to}` : 'Version nicht geparst'}${dependency?.major ? ' · MAJOR' : ''}${dependency?.security ? ' · [SECURITY]' : ''}` })] })] }, key)
+    }) }),
+    jsxs('div', { className: 'mt-3 flex flex-wrap gap-2', children: [jsx(Button, { size: 'sm', disabled: !selected.size, onClick: () => onConfirm(items.filter(item => selected.has(queueIssueKey(item)))), children: 'Auswahl zur Merge-Vorschau' }), jsx(Button, { size: 'sm', variant: 'outline', onClick: onClose, children: 'Abbrechen' })] }),
+  ] }) })
+}
 function AggregateList({scope,kind,query,ownersQ,repoOptions = [],repoDiscoveryError,active = true,onOpen}) {
   const issues = useSharedIssueQueue(), prs = useSharedPrQueue()
   const sharedQueue = kind === 'prs' ? prs : issues
   const state = useValue(kind === 'prs' ? $prState : $issueState)
+  const [botView, setBotView] = useState(false)
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false)
+  const [botFilter, setBotFilter] = useState({ bot: '', level: 'all', security: false, showOnboarding: false })
+  const [botConfig, setBotConfig] = useState(() => pluginCtx?.storage?.get('dependencyBotSettings', { logins: [], prefixes: ['renovate/', 'dependabot/'] }) || { logins: [], prefixes: ['renovate/', 'dependabot/'] })
+  const [botLoginsText, setBotLoginsText] = useState(() => (pluginCtx?.storage?.get('dependencyBotSettings', { logins: [] })?.logins || []).join('\n'))
+  const [botPrefixesText, setBotPrefixesText] = useState(() => (pluginCtx?.storage?.get('dependencyBotSettings', { prefixes: ['renovate/', 'dependabot/'] })?.prefixes || []).join('\n'))
+  const [botConfigError, setBotConfigError] = useState('')
   const filters = useValue(githubShellStore.aggregateFilters)
   const search = useAggregateDebounce(query)
   const repoFilter = useAggregateDebounce(filters.repo)
@@ -4507,13 +4563,46 @@ function AggregateList({scope,kind,query,ownersQ,repoOptions = [],repoDiscoveryE
   const repoOptionsOwned = repoOptions.filter(r => ownerOptions.some(o => o.login.toLowerCase() === r.split('/')[0].toLowerCase()) && (!filters.owner || r.split('/')[0].toLowerCase() === filters.owner.toLowerCase()))
   const controlStyle = {background:'var(--ui-bg-editor)',color:'var(--ui-text-primary)',border:'1px solid var(--ui-stroke-secondary)',borderRadius:6,padding:'4px 6px',fontSize:11,minWidth:0}
   const notices = [...(ownersQ.data?.notices || []),...(q.data?.notices || []),...(repoDiscoveryError ? ['Single-repo discovery failed. Combined owner search remains available; Repo filter options may be incomplete. Check gh authorization and Refresh.'] : [])]
+  const botRows = kind === 'prs' ? (q.data?.rows || []).filter(item => dependencyBotPr(item, botConfig)) : []
+  const botFiltered = botRows.filter(item => {
+    const dependency = parseDependencyTitle(item.title)
+    const login = (item.author?.login || '').toLowerCase()
+    const onboarding = /configure renovate|dependency dashboard/i.test(item.title || '')
+    return (botFilter.showOnboarding || !onboarding)
+      && (!botFilter.bot || login === botFilter.bot.toLowerCase())
+      && (botFilter.level === 'all' || (botFilter.level === 'major' ? dependency?.major === true : dependency?.major === false))
+      && (!botFilter.security || !!dependency?.security)
+  }).map(item => ({ ...item, checkState: ciState(item.fixStatusCheckRollup || item.statusCheckRollup), mergeableState: String(item.mergeable || '').toLowerCase() }))
+  const botGroups = groupDependencyPrs(botFiltered)
+  const saveBotConfig = () => {
+    const logins = [...new Set(botLoginsText.split(/[\n,]+/).map(value => value.trim()).filter(Boolean))]
+    const prefixes = [...new Set(botPrefixesText.split(/[\n,]+/).map(value => value.trim()).filter(Boolean))]
+    if (logins.some(value => !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?$/i.test(value)) || prefixes.some(value => !/^[A-Za-z0-9][A-Za-z0-9_.-]*\/$/.test(value))) { setBotConfigError('Ungültiger Bot-Login oder Branch-Präfix. Präfixe müssen mit / enden.'); return }
+    const next = { logins, prefixes }
+    try { pluginCtx.storage.set('dependencyBotSettings', next); setBotConfig(next); setBotConfigError('Einstellungen gespeichert') }
+    catch (error) { setBotConfigError(`Einstellungen nicht gespeichert: ${error.message || error}`) }
+  }
   return jsxs('div',{className:'flex h-full min-h-0 flex-col',children:[
     jsxs('div',{className:'shrink-0 p-3 border-b border-(--ui-stroke-secondary)',children:[
       jsxs('div',{className:'flex flex-wrap gap-2',children:[
         jsx('select',{'aria-label':'Owner filter',value:filters.owner,style:controlStyle,onChange:e => change({owner:e.target.value,repo:''}),children:[jsx('option',{value:'',children:'All owners'},'all'),...ownerOptions.map(o => jsx('option',{value:o.login,children:o.login},o.login))]}),
         jsx('select',{'aria-label':'Repo filter',value:filters.repo,style:{...controlStyle,maxWidth:'100%'},onChange:e => change({repo:e.target.value}),children:[jsx('option',{value:'',children:'All repos'},'all'),...repoOptionsOwned.map(r => jsx('option',{value:r,children:r},r))]}),
         ...[['assigned','Assigned to me'],['authored','Authored by me'],...(kind === 'prs' ? [['review','Review requested']] : []),['forks','Include forks']].map(([field,label]) => jsxs('label',{className:'inline-flex items-center gap-1 text-[11px] text-(--ui-text-secondary)',children:[jsx('input',{type:'checkbox',checked:!!filters[field],onChange:e => change({[field]:e.target.checked})}),label]},field)),
+        kind === 'prs' ? jsx(Button,{variant:botView?'outline':'ghost',size:'sm','aria-pressed':botView,onClick:() => setBotView(value => !value),children:botView?'Alle PRs':'Bot-PRs'}) : null,
       ]}),
+      botView ? jsxs('div',{className:'mt-2 flex flex-wrap items-center gap-2',children:[
+        jsx('select',{'aria-label':'Bot filter',value:botFilter.bot,style:controlStyle,onChange:e => setBotFilter(value => ({...value,bot:e.target.value})),children:[jsx('option',{value:'',children:'Alle Bots'}),...Array.from(new Set(botRows.map(item => item.author?.login).filter(Boolean))).sort().map(login => jsx('option',{value:login,children:login},login))]}),
+        jsx('select',{'aria-label':'Dependency update size',value:botFilter.level,style:controlStyle,onChange:e => setBotFilter(value => ({...value,level:e.target.value})),children:[jsx('option',{value:'all',children:'Major + Minor/Patch'}),jsx('option',{value:'major',children:'Major'}),jsx('option',{value:'minor',children:'Minor/Patch'})]}),
+        jsxs('label',{className:'inline-flex items-center gap-1 text-[11px]',children:[jsx('input',{type:'checkbox',checked:botFilter.security,onChange:e => setBotFilter(value => ({...value,security:e.target.checked}))}),'Security only']}),
+        jsxs('label',{className:'inline-flex items-center gap-1 text-[11px]',children:[jsx('input',{type:'checkbox',checked:botFilter.showOnboarding,onChange:e => setBotFilter(value => ({...value,showOnboarding:e.target.checked}))}),'Onboarding-PRs einblenden']}),
+        jsxs('details',{className:'text-[11px]',children:[jsx('summary',{children:'Bot-Erkennung konfigurieren'}),
+          jsxs('label',{className:'block mt-2',children:['Zusätzliche Bot-Logins',jsx('textarea',{'aria-label':'Additional dependency bot logins',rows:2,value:botLoginsText,onChange:e => setBotLoginsText(e.target.value),style:controlStyle})]}),
+          jsxs('label',{className:'block mt-2',children:['Branch-Präfixe',jsx('textarea',{ 'aria-label':'Dependency bot branch prefixes',rows:2,value:botPrefixesText,onChange:e => setBotPrefixesText(e.target.value),style:controlStyle})]}),
+          jsx(Button,{size:'sm',variant:'outline',onClick:saveBotConfig,children:'Erkennung speichern'}),botConfigError?jsx('span',{role:botConfigError.startsWith('Einstellungen gespeichert')?'status':'alert',children:botConfigError}):null,
+        ]}),
+        botGroups.green.length ? jsx(Button,{size:'sm',variant:'outline',onClick:() => setMergeDialogOpen(true),disabled:sharedQueue.busy,children:'Alle grünen mergen · Vorschau'}) : null,
+        jsx('span',{className:'text-[10px] text-(--ui-text-tertiary)',children:'Merge erfolgt nur über die PR-Queue mit exakter Eligibility-Prüfung und Bestätigung.'}),
+      ]}) : null,
       jsx('p',{className:'mt-2 text-[10px] text-(--ui-text-tertiary)',children:'Own user + member organizations only • archived excluded • 60 s cache • search calls paced'}),
       jsx('p',{className:'mt-1 text-[10px] text-(--ui-text-tertiary)',children:'Only repositories visible to gh are searchable. SSO/OAuth may hide private results silently; verify token and organization authorization if an owner looks incomplete.'}),
       ...notices.map(notice => jsx('p',{role:'status',className:'mt-2 text-[11px] text-(--ui-yellow)',children:notice},notice)),
@@ -4528,7 +4617,19 @@ function AggregateList({scope,kind,query,ownersQ,repoOptions = [],repoDiscoveryE
       q.isError ? jsx(GhErrorState,{title:'Could not refresh combined list',error:q.error,onRetry:() => q.refetch()}) : null,
       more.isError ? jsx(GhErrorState,{title:'Could not load the next page',error:more.error,onRetry:() => more.mutate({options,key,data:q.data})}) : null,
       q.data && !validation ? jsx('div',{className:'gh-list-heading text-[10px]',children:`${kind === 'prs' ? 'Pull requests' : 'Issues'} • ${q.data.rows.length} loaded • updated newest first`}) : null,
-      ...(validation ? [] : q.data?.rows || []).map(item => jsxs('div',{className:'gh-list-row flex items-start gap-2 px-3 py-2.5',onClick:() => { if (kind === 'prs' ? prDetailAllowed($prQueue.get()) : issueDetailAllowed($issueQueue.get())) onOpen(item) },children:[
+      botView && kind === 'prs' ? jsxs('div',{className:'gh-list',children:[
+        ...[['green','Grün und mergebar'],['red','Rot'],['pending','Ausstehend'],['conflict','Konflikt']].map(([key,label]) => jsxs('section',{className:'border-b border-(--ui-stroke-secondary)',children:[jsx('h3',{className:'gh-list-heading text-[11px] font-semibold',children:`${label} · ${botGroups[key].length}`}),...botGroups[key].map(item => {
+          const dependency=item.dependency, botKey=`${item.repo.toLowerCase()}#${item.number}`
+          return jsxs('article',{className:'gh-list-row p-3',children:[
+            jsxs('div',{className:'flex flex-wrap items-center gap-2',children:[jsx('a',{href:item.url,target:'_blank',rel:'noreferrer',className:'font-semibold underline',children:`${item.repo}#${item.number}`}),jsx('span',{children:dependency?`${dependency.package} · ${dependency.from || '?'} → ${dependency.to}`:item.title}),dependency?.major?jsx('span',{className:'gh-status-chip',children:'MAJOR'}):null,dependency?.security?jsx('span',{className:'gh-status-chip',children:'[SECURITY]'}):null,jsx('span',{className:'text-[10px] text-(--ui-text-tertiary)',children:`@${item.author?.login || 'unknown'} · ${ago(item.updatedAt)}`})]}),
+            jsx('p',{className:'mt-1 text-[11px] text-(--ui-text-secondary)',children:item.title}),
+            jsxs('div',{className:'mt-2 flex flex-wrap gap-2',children:[key==='green'?jsx(Button,{size:'sm',variant:'outline',disabled:sharedQueue.busy||sharedQueue.draft.items.some(entry=>queueIssueKey(entry)===botKey),onClick:()=>sharedQueue.change({type:'toggle',item}),children:'Zur Merge-Queue'}):null,key==='red'?jsx('span',{className:'text-[11px] text-(--ui-yellow)',children:'Batch-Fix deaktiviert: #10 enthält keine Multi-PR-Fix-Queue; Einzel-Fix bleibt am PR verfügbar.'}):null,key==='conflict'?jsx(DependencyRebaseAction,{item}):null,key==='red'?jsx(FixChecksAction,{repo:item.repo,number:item.number,rollup:item.fixStatusCheckRollup,incomplete:item.fixRollupIncomplete,state:item.state}):null]}),
+          ]},botKey)
+        })]},key)),
+        !botFiltered.length?jsx('p',{className:'p-3 text-xs',children:'Keine Dependency-Bot-PRs in den aktuell geladenen kombinierten Suchergebnissen.'}):null,
+      ]}) : null,
+      mergeDialogOpen ? jsx(DependencyMergeDialog,{items:botGroups.green,onClose:() => setMergeDialogOpen(false),onConfirm:items => { for (const item of items) if (!sharedQueue.draft.items.some(entry => queueIssueKey(entry)===queueIssueKey(item))) sharedQueue.change({type:'toggle',item}); setMergeDialogOpen(false) }}) : null,
+      ...(!botView && !validation ? q.data?.rows || [] : []).map(item => jsxs('div',{className:'gh-list-row flex items-start gap-2 px-3 py-2.5',onClick:() => { if (kind === 'prs' ? prDetailAllowed($prQueue.get()) : issueDetailAllowed($issueQueue.get())) onOpen(item) },children:[
         jsx('input', { type: 'checkbox', 'aria-label': kind === 'prs' ? `PR ${item.repo}#${item.number} auswählen` : `Issue ${item.repo}#${item.number} auswählen`, checked: sharedQueue.draft.items.some(i => queueIssueKey(i) === queueIssueKey(item)), disabled: sharedQueue.busy || item.state !== 'OPEN', onClick: e => e.stopPropagation(), onChange: () => sharedQueue.change({ type: 'toggle', item }) }),
         jsx(Avatar,{login:item.author?.login,size:24}),
         jsxs('div',{className:'min-w-0 flex-1',children:[
