@@ -228,15 +228,30 @@ test('redactIssueSecrets masks supported credential forms recursively and leaves
   assert.equal(redacted.body[6], input.body[6])
 })
 
-test('duplicate title and body are both masked before update review', () => {
+test('duplicate title and body are both masked before update review and write', async () => {
   const duplicate = {
     title: 'Fix token=title-secret-value-12345',
-    body: 'Existing context password=body-secret-value-12345',
+    body: 'Existing context password=body-secret-value-12345\nKeep this older context.',
   }
   const reviewedTitle = redactIssueSecrets(duplicate.title)
   const reviewedBody = issueDraftFinalBody(duplicate, 'New content token=draft-secret-value-12345')
   assert.equal(reviewedTitle, 'Fix token=[REDACTED]')
   assert.ok(reviewedBody.includes('password=[REDACTED]'))
+  assert.ok(reviewedBody.includes('Keep this older context.'))
   assert.ok(reviewedBody.includes('token=[REDACTED]'))
   assert.ok(![reviewedTitle, reviewedBody].join('\n').includes('secret-value'))
+
+  let storedTitle = duplicate.title
+  let storedBody = duplicate.body
+  let writtenBody = ''
+  await confirmedIssueWrite({
+    action: 'update', confirmed: true, repo: 'owner/repo', title: reviewedTitle, body: reviewedBody,
+    number: 7, originalTitle: duplicate.title, originalBody: duplicate.body,
+    readIssue: async () => ({ number: 7, title: storedTitle, body: storedBody, state: 'OPEN' }),
+    updateIssue: async (_repo, _number, title, body) => { storedTitle = title; writtenBody = body; storedBody = body },
+  })
+  assert.equal(writtenBody, reviewedBody)
+  assert.ok(writtenBody.includes('password=[REDACTED]'))
+  assert.ok(writtenBody.includes('Keep this older context.'))
+  assert.ok(!writtenBody.includes('body-secret-value'))
 })
