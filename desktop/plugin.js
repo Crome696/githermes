@@ -1525,6 +1525,37 @@ export function isMergeConflict(mergeableState) {
   return mergeableState === 'dirty'
 }
 
+export function dependencyBotPr(pr, { logins = [], prefixes = ['renovate/', 'dependabot/'] } = {}) {
+  const author = loginOf(pr?.author || pr?.user).toLowerCase()
+  const configured = new Set(['renovate[bot]', 'dependabot[bot]', ...logins].map(value => loginOf(value).toLowerCase()).filter(Boolean))
+  const branch = String(pr?.headRefName || pr?.head?.ref || '')
+  return configured.has(author) || prefixes.some(prefix => typeof prefix === 'string' && prefix && branch.toLowerCase().startsWith(prefix.toLowerCase()))
+}
+
+export function parseDependencyTitle(title) {
+  const text = String(title || '').replace(/^\s*(?:\[security\]\s*)+/i, '').replace(/^[^:]+:\s*/, '')
+  const match = text.match(/^(?:update|bump|upgrade)\s+(?:the\s+)?(?:dependency|package)\s+(.+?)\s+from\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)\s+(?:to|→)\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
+    || text.match(/^(?:update|bump|upgrade)\s+(.+?)\s+from\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)\s+(?:to|→)\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
+  if (!match) return null
+  const [, name, from, to] = match
+  const major = Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
+  return { package: name.trim().replace(/^[`'" ]+|[`'" ]+$/g, ''), from, to, major, security: /\[security\]/i.test(title) }
+}
+
+export function groupDependencyPrs(rows = []) {
+  const groups = { green: [], red: [], pending: [], conflict: [] }
+  for (const pr of rows) {
+    const check = String(pr.checkState || ciState(pr.statusCheckRollup || pr.fixStatusCheckRollup) || '').toUpperCase()
+    const conflict = isMergeConflict(pr.mergeableState || pr.mergeable_state)
+    const group = conflict ? 'conflict'
+      : ['FAILURE', 'FAILING', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE'].includes(check) ? 'red'
+      : pr.isDraft === true || !['SUCCESS', 'PASSING'].includes(check) || !['clean', 'has_hooks', 'unstable'].includes(pr.mergeableState || pr.mergeable_state || '') ? 'pending'
+      : 'green'
+    groups[group].push({ ...pr, dependency: parseDependencyTitle(pr.title) })
+  }
+  return groups
+}
+
 // Issue #58: approve only open PRs authored by someone else — gh refuses
 // self-approval, so the button must not be there in the first place.
 export function canApprove(prKey, viewerLogin, authorLogin) {
