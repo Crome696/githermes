@@ -33,6 +33,7 @@ A single-file desktop plugin (`@hermes/plugin-sdk`) that shows your repository's
 - **Commits** — same rail; each row is a `<details>` with lazy-loaded body / `+−` / files; SHA + external link do not toggle
 - **Files** — unified hunks per file, line numbers, theme diff colors, `A/D/M/R` badge; unboxed header, border on the diff body
 - **Issues** — label chips in the label's own color, black/white text via W3C relative luminance
+- **Session issue drafts** — use the command palette action **GitHub: Draft issue from this session** or **Draft issue** in the pane. Hermes proposes a structured draft; GitHermes resolves the repo from the session or explicit chat reference, masks secret-shaped values, and searches open issues before enabling a write. Existing issues show a body diff and are re-read immediately before an explicitly confirmed rewrite. Create/update results are read back and the verified link is inserted into the session composer. Automatic suggestions are opt-in (**Auto suggestions: on/off**) and only react to explicit issue-intent phrasing.
 - **Theme** — field surfaces on `--ui-editor-surface-background` (matte/glass inherited from Desktop); cards on `--ui-bg-quaternary`; container queries at `<360` / `<300` / `<240`
 
 ## Requirements
