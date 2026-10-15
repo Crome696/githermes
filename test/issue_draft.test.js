@@ -41,7 +41,8 @@ test('duplicate search uses task content, finds a matching issue fixture, and om
   const fixture = { title, body: 'Persist a session issue draft after a model response. The pane currently loses the proposed title and body. Read assistant history and populate the form once. The returned draft appears without copy and paste.', state: 'OPEN' }
   const terms = query.replace(/^is:issue is:open in:title,body\s*/, '').toLowerCase().split(/\s+/).filter(Boolean)
   assert.ok(terms.length > 0)
-  assert.ok(terms.every(term => `${fixture.title} ${fixture.body}`.toLowerCase().includes(term)), `fixture did not match terms: ${terms.join(', ')}`)
+  const matches = [fixture].filter(issue => issue.state === 'OPEN' && terms.every(term => `${issue.title} ${issue.body}`.toLowerCase().includes(term)))
+  assert.deepEqual(matches, [fixture], `matching open-issue fixture not found for terms: ${terms.join(', ')}`)
   for (const boilerplate of ['## Goal', '## Context', '## Implementation', '## Acceptance criteria', '## References', 'Describe the desired outcome', 'Add relevant session context', 'Add relevant session, PR, or issue links']) {
     assert.ok(!query.includes(boilerplate), `query contains template boilerplate: ${boilerplate}`)
   }
