@@ -239,16 +239,33 @@ real checks, and a separate PR with a `Closes owner/repo#N` reference per issue.
   requirements. Opt-in permits only acceptance-criteria/subtask clarification in
   the issue body, without expanding scope or weakening gates. Preserve other
   content, re-read before editing and verify the exact body after writing.
-- **Block on issue** defaults to on: an obstacle, unclear criteria or required
-  review/approval pauses the entire Goal. Off pauses the affected repo queue;
-  only independent repos in parallel mode may continue. Later issues in the
-  blocked repo and sequential global order cannot bypass the blocker.
-- **Bei Fehlern** remains separate: Stop halts the entire Goal on processing
-  errors; Skip permits only transparent skipping of non-blocking errors, never
-  failed required checks, unclear criteria or pending approval.
-- **Auto-merge defaults to off**; only explicit opt-in for the current queue adds
-  conditional merge instructions. Required profile approvals, current-head
-  checks and branch protection still apply. Merge consent resets after reload.
+- **Block on issue** defaults to on: an unresolvable obstacle, unclear criteria
+  or genuinely outstanding required review/permission pauses the entire Goal.
+  Off pauses the affected repo queue; only independent repos in parallel mode
+  may continue. Later issues in the blocked repo and sequential global order
+  cannot bypass the blocker. Obtain independent reviews and wait for checks;
+  ask the user only for a concrete blocker that cannot be resolved autonomously.
+- **Bei Fehlern** remains separate: Stop is the queue's pause-on-error contract,
+  including reparable unexpected errors; stop before further edits/retests,
+  preserve evidence and limit diagnosis to reads. An intentionally failing
+  reproduction regression is not an unexpected error. Without a current
+  pause-on-error contract, diagnose reparable test/build/tool/CI failures,
+  repair within scope and retest first. Skip permits only transparent skipping
+  of non-blocking errors, never bypassing required checks or reviews. Explicit
+  current pause-on-error instructions take precedence.
+- **Auto-merge defaults to off**; explicit opt-in is advance personal merge
+  permission for the selected queue, recorded once rather than requested again
+  per PR. Only the coordinating parent may merge, not delegated workers. Other
+  queues and tag/release publication are not authorized. Independent required
+  reviews, current-head and current-base integration checks, branch protection,
+  native security gates and all other profile rules remain required. Merge
+  consent resets after reload; saved DRAFT preferences do not renew it.
+
+Any new user-facing blocker request must identify the repository/issue/PR,
+applicable rule, head/base, log or API evidence, attempted remedy and exact
+missing decision. After consent, generic “approval missing” is insufficient:
+show a new scope/security decision, revoked consent or an actually unmet
+required review/protection rule. Unknown native gates remain blocked.
 
 Older drafts keep their items and existing options and receive the safe new
 defaults, with no accidental refinement permission. Explicit new preferences
@@ -309,7 +326,13 @@ or auto-merge bypass. It must refresh every remaining PR after a merge. Ignore
 mode leaves conflicts untouched. Rebase-and-fix mode is same-repo only, with an
 explicit old-head force-with-lease, local checks, new-head Required Checks and
 fresh valid review; unresolved conflicts stop without pushing. Fork conflicts
-are skipped with a reason. Existing profile/user approvals remain required.
+are skipped with a reason. The confirmed merge action supplies personal merge
+permission only for the selected PRs; do not ask again per PR. Independent
+reviews, branch protection, native security gates and all other profile rules
+remain required. Only the coordinating parent may merge. The same evidence-backed
+blocker and repair-before-skip contract applies within the selected action and
+conflict policy; Stop still pauses before repair/retest. Review does not grant
+merge or code/branch-change permission.
 
 The PR start shares the issue submission state machine but uses separate
 `prQueueGoalSubmission`, PR assignment identities and completed-action receipts.
