@@ -5094,8 +5094,12 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
   const writeLock = useRef(false)
   const draftEdited = useRef(false)
   const adoptedDraft = useRef('')
+  const repoEdited = useRef(false)
   useEffect(() => {
-    if (!repo) setRepo(resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromText(chatContext) || issueDraftRepoFromText(candidate) }))
+    if (!repoEdited.current) {
+      const resolved = resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromText(chatContext) || issueDraftRepoFromText(candidate) })
+      if (resolved) setRepo(resolved)
+    }
   }, [repo, sessionRepo, chatContext, candidate])
   useEffect(() => {
     const fingerprint = sessionDraft ? JSON.stringify(sessionDraft) : ''
@@ -5157,7 +5161,7 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
       jsx(Button, { variant: 'ghost', size: 'sm', onClick: onBack, children: 'Back' }),
     ] }),
     jsx('p', { className: 'text-[11px] text-(--ui-text-tertiary)', children: 'Nothing is sent to GitHub until you click Anlegen or Aktualisieren. Secret-shaped values are masked in the draft.' }),
-    jsx(Input, { value: repo, disabled: !!completed, onChange: e => { setRepo(e.target.value); setChecked(false) }, placeholder: 'owner/repository', 'aria-label': 'Issue repository' }),
+    jsx(Input, { value: repo, disabled: !!completed, onChange: e => { repoEdited.current = true; setRepo(e.target.value); setChecked(false) }, placeholder: 'owner/repository', 'aria-label': 'Issue repository' }),
     !repo ? jsx('p', { role: 'status', className: 'text-xs text-(--ui-text-secondary)', children: 'Repository not found in the session or chat. Enter owner/repository to continue.' }) : null,
     jsx(Input, { value: title, disabled: !!completed, onChange: e => { draftEdited.current = true; setTitle(redactIssueSecrets(e.target.value)); setChecked(false) }, placeholder: 'Issue title', 'aria-label': 'Issue title' }),
     jsx(Textarea, { value: body, disabled: !!completed, onChange: e => { draftEdited.current = true; setBody(redactIssueSecrets(e.target.value)); setChecked(false) }, rows: 12, className: 'min-h-48 resize-y text-xs', placeholder: 'Goal, context, implementation and acceptance criteria', 'aria-label': 'Issue body' }),
@@ -5171,7 +5175,7 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
     !completed && message ? jsx('p', { role: 'status', className: 'break-all text-xs text-(--ui-text-secondary)', children: message }) : null,
     matches.length ? jsxs('section', { className: 'space-y-2', children: [
       jsx('h3', { className: 'text-xs font-semibold', children: 'Possible open duplicates' }),
-      ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { setSelected(item); setTitle(item.title); setBody(rewriteIssueBody(redactIssueSecrets(item.body || ''), safeBody)); setChecked(true); setError('') }, children: [
+      ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { draftEdited.current = true; setSelected(item); setTitle(item.title); setBody(rewriteIssueBody(redactIssueSecrets(item.body || ''), safeBody)); setChecked(true); setError('') }, children: [
         jsx('span', { className: 'font-semibold', children: `${repo}#${item.number} ${item.title}` }),
         jsx('span', { className: 'mt-1 block whitespace-pre-wrap text-(--ui-text-tertiary)', children: redactIssueSecrets(item.body || '').slice(0, 2000) }),
       ] }, item.number)),

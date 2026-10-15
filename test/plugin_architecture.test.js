@@ -361,6 +361,7 @@ test('Issue #13 R1: manual drafting reads the active chat context and adopts the
   assert.ok(pane.includes('const chatContext = issueDraftFromMessages(historyQ.data)'), 'chat repository/link context must come from session history')
   assert.ok(pane.includes('parseIssueDraftResponse(historyQ.data)'), 'the active session answer must be parsed')
   assert.ok(pane.includes('sessionRepo: sessionGit.data?.repo, chatContext'), 'session remote is supplied before chat fallback')
+  assert.ok(draft.includes('if (!repoEdited.current)') && draft.includes('repoEdited.current = true'), 'late Git-remote discovery wins over chat fallback unless the user edits the repository')
   assert.ok(draft.includes('sessionDraft?.title && sessionDraft?.body'), 'parsed title/body must enter the form')
   assert.ok(draft.includes('setTitle(redactIssueSecrets(sessionDraft.title))') && draft.includes('setBody(redactIssueSecrets(sessionDraft.body))'), 'adoption remains secret-masked')
   assert.ok(draft.includes('Repository not found in the session or chat. Enter owner/repository to continue.'), 'missing repository context must request input')
