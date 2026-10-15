@@ -21,6 +21,28 @@ export function issueDraftRepoFromText(text) {
   return `${owner}/${repo}`
 }
 
+export function issueDraftRepoFromMessages(messages) {
+  if (!Array.isArray(messages)) return ''
+  for (const message of messages.slice().reverse()) {
+    const text = messageText(message)
+    if (!text) continue
+    const candidates = new Set()
+    const urlPattern = /https?:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\/|[?#\s.,;!)]|$)/gi
+    for (const match of text.matchAll(urlPattern)) candidates.add(`${match[1]}/${match[2].replace(/\.git$/i, '').replace(/[.,;!]+$/, '')}`)
+    const withoutUrls = text.replace(/https?:\/\/github\.com\/[^\s]*/gi, ' ')
+    const literalPattern = /\b([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)\b/g
+    const pathRoots = new Set(['src', 'test', 'tests', 'lib', 'desktop', 'scripts', 'docs', 'assets', 'dist', 'build', 'packages', 'apps', 'components', 'node_modules'])
+    for (const match of withoutUrls.matchAll(literalPattern)) {
+      const owner = match[1]
+      const repo = match[2]
+      if ((owner.toLowerCase() === 'and' && repo.toLowerCase() === 'or') || pathRoots.has(owner.toLowerCase())) continue
+      candidates.add(`${owner}/${repo}`)
+    }
+    if (candidates.size) return candidates.size === 1 ? [...candidates][0] : ''
+  }
+  return ''
+}
+
 export function redactIssueSecrets(value) {
   if (Array.isArray(value)) return value.map(redactIssueSecrets)
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactIssueSecrets(item)]))
@@ -124,7 +146,17 @@ export function issueBodyDiff(before, after) {
 }
 
 export function rewriteIssueBody(existing, draft) {
-  return String(draft || '').trim()
+  const body = String(existing || '')
+  const content = String(draft || '').trim()
+  const start = '<!-- githermes:issue-draft:start -->'
+  const end = '<!-- githermes:issue-draft:end -->'
+  const startIndex = body.indexOf(start)
+  const endIndex = body.indexOf(end, startIndex + start.length)
+  if (startIndex >= 0 && endIndex >= 0) {
+    return `${body.slice(0, startIndex + start.length)}\n${content}\n${body.slice(endIndex)}`
+  }
+  const section = `${start}\n${content}\n${end}`
+  return body.trim() ? `${body.trimEnd()}\n\n${section}` : section
 }
 
 export async function confirmedIssueWrite({ action, confirmed, repo, title, body, number, originalTitle, originalBody, readIssue, createIssue, updateIssue }) {

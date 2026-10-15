@@ -47,7 +47,7 @@ import {
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
 import { buildFinalizeQuery, decodeFinalizeResponse, finalizeMarkdown, finalizePollInterval } from './finalize.js'
-import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftFromMessages, issueDraftRepoFromText, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo, rewriteIssueBody } from './issue_draft.js'
+import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftRepoFromMessages, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo, rewriteIssueBody } from './issue_draft.js'
 
 const ID = 'githermes'
 const PANE_ID = `${ID}:pane`
@@ -5080,8 +5080,8 @@ function IssueDetail({ repo, number, onBack, active = true }) {
   })
 }
 
-function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, onBack }) {
-  const [repo, setRepo] = useState(resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromText(chatContext) || issueDraftRepoFromText(candidate) }))
+function IssueDraftPanel({ sessionRepo, chatMessages, candidate, sessionDraft, onBack }) {
+  const [repo, setRepo] = useState(resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromMessages(chatMessages) }))
   const [title, setTitle] = useState(issueDraftTitle(candidate))
   const [body, setBody] = useState(buildIssueDraftBody(candidate ? { goal: candidate } : {}))
   const [matches, setMatches] = useState([])
@@ -5097,10 +5097,10 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
   const repoEdited = useRef(false)
   useEffect(() => {
     if (!repoEdited.current) {
-      const resolved = resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromText(chatContext) || issueDraftRepoFromText(candidate) })
-      if (resolved) setRepo(resolved)
+      const resolved = resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromMessages(chatMessages) })
+      setRepo(resolved)
     }
-  }, [repo, sessionRepo, chatContext, candidate])
+  }, [repo, sessionRepo, chatMessages, candidate])
   useEffect(() => {
     const fingerprint = sessionDraft ? JSON.stringify(sessionDraft) : ''
     if (fingerprint && fingerprint !== adoptedDraft.current && !draftEdited.current && sessionDraft?.title && sessionDraft?.body) {
@@ -5164,7 +5164,7 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
     ] }),
     jsx('p', { className: 'text-[11px] text-(--ui-text-tertiary)', children: 'Nothing is sent to GitHub until you click Anlegen or Aktualisieren. Secret-shaped values are masked in the draft.' }),
     jsx(Input, { value: repo, disabled: !!completed, onChange: e => { repoEdited.current = true; setRepo(e.target.value); setChecked(false) }, placeholder: 'owner/repository', 'aria-label': 'Issue repository' }),
-    !repo ? jsx('p', { role: 'status', className: 'text-xs text-(--ui-text-secondary)', children: 'Repository not found in the session or chat. Enter owner/repository to continue.' }) : null,
+    !repo ? jsx('p', { role: 'status', className: 'text-xs text-(--ui-text-secondary)', children: 'Which repository should this issue use? Enter owner/repository to continue.' }) : null,
     jsx(Input, { value: title, disabled: !!completed, onChange: e => { draftEdited.current = true; setTitle(redactIssueSecrets(e.target.value)); setChecked(false) }, placeholder: 'Issue title', 'aria-label': 'Issue title' }),
     jsx(Textarea, { value: body, disabled: !!completed, onChange: e => { draftEdited.current = true; setBody(redactIssueSecrets(e.target.value)); setChecked(false) }, rows: 12, className: 'min-h-48 resize-y text-xs', placeholder: 'Goal, context, implementation and acceptance criteria', 'aria-label': 'Issue body' }),
     jsx('div', { className: 'flex flex-wrap gap-2', children: [
@@ -5177,13 +5177,13 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
     !completed && message ? jsx('p', { role: 'status', className: 'break-all text-xs text-(--ui-text-secondary)', children: message }) : null,
     matches.length ? jsxs('section', { className: 'space-y-2', children: [
       jsx('h3', { className: 'text-xs font-semibold', children: 'Possible open duplicates' }),
-      ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { draftEdited.current = true; setSelected(item); setTitle(item.title); setBody(rewriteIssueBody(redactIssueSecrets(item.body || ''), safeBody)); setChecked(true); setError('') }, children: [
+      ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { draftEdited.current = true; setSelected(item); setTitle(redactIssueSecrets(item.title)); setBody(rewriteIssueBody(redactIssueSecrets(item.body || ''), safeBody)); setChecked(true); setError('') }, children: [
         jsx('span', { className: 'font-semibold', children: `${repo}#${item.number} ${redactIssueSecrets(item.title)}` }),
         jsx('span', { className: 'mt-1 block whitespace-pre-wrap text-(--ui-text-tertiary)', children: redactIssueSecrets(item.body || '').slice(0, 2000) }),
       ] }, item.number)),
       selected ? jsxs('div', { className: 'rounded border border-(--ui-stroke-secondary) p-2', children: [
         jsx('h4', { className: 'mb-1 text-xs font-semibold', children: 'Body diff (existing → draft)' }),
-        jsx('pre', { className: 'max-h-48 overflow-auto whitespace-pre-wrap text-[10px]', children: issueBodyDiff(redactIssueSecrets(selected.body || ''), safeBody) }),
+        jsx('pre', { className: 'max-h-48 overflow-auto whitespace-pre-wrap text-[10px]', children: issueBodyDiff(redactIssueSecrets(selected.body || ''), rewriteIssueBody(redactIssueSecrets(selected.body || ''), safeBody)) }),
       ] }) : null,
     ] }) : null,
   ] })
@@ -5377,14 +5377,13 @@ function GitHubPane() {
   const showIssue = tab === 'issues' && selIssue != null && issueDetailAllowed(queueDraft)
   const detectedCandidate = autoIssueSuggestions ? detectIssueDraftCandidate(historyQ.data) : null
   const sessionDraft = parseIssueDraftResponse(historyQ.data)
-  const chatContext = issueDraftFromMessages(historyQ.data)
   useEffect(() => {
     if (detectedCandidate && detectedCandidate !== dismissedCandidate.current) $issueDraftCandidate.set(detectedCandidate)
     else $issueDraftCandidate.set(null)
   }, [detectedCandidate])
 
   if (showFinalize) return jsx(FinalizePanel, { finalization })
-  if (showIssueDraft) return jsx(IssueDraftPanel, { sessionRepo: sessionGit.data?.repo, chatContext, candidate: issueDraftCandidate, sessionDraft, onBack: () => $showIssueDraft.set(false) })
+  if (showIssueDraft) return jsx(IssueDraftPanel, { sessionRepo: sessionGit.data?.repo, chatMessages: historyQ.data, candidate: issueDraftCandidate, sessionDraft, onBack: () => $showIssueDraft.set(false) })
   if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, active: paneVisible, onBack: () => $selPr.set(null) })
   if (showIssue) return jsx(IssueDetail, { repo:selIssue.repo || repo, number:selIssue.number || selIssue, active: paneVisible, onBack: () => $selIssue.set(null) })
 

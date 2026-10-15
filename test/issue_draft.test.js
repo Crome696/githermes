@@ -6,6 +6,7 @@ import {
   detectIssueDraftCandidate,
   duplicateSearchQuery,
   issueDraftRepoFromText,
+  issueDraftRepoFromMessages,
   issueDraftTitle,
   parseIssueDraftResponse,
   issueBodyDiff,
@@ -29,10 +30,24 @@ test('repo selection prefers the session repository, accepts an explicit chat re
   assert.equal(issueDraftRepoFromText('Repository: owner/repository'), 'owner/repository')
 })
 
+test('chat repo resolution selects the newest explicit repository mention', () => {
+  assert.equal(issueDraftRepoFromMessages([
+    { role: 'user', content: 'Use https://github.com/older/repo for this.' },
+    { role: 'assistant', content: 'The latest request is for https://github.com/newer/repo.' },
+  ]), 'newer/repo')
+})
+
+test('chat repo resolution leaves same-message ties unresolved for the user', () => {
+  assert.equal(issueDraftRepoFromMessages([
+    { role: 'user', content: 'Please use https://github.com/one/repo and https://github.com/two/repo.' },
+  ]), '')
+})
+
 test('duplicate search is scoped to open issues and title/body; body rewrite diff shows additions and removals', () => {
   assert.equal(duplicateSearchQuery('Keyboard bug', 'Focus lost'), 'is:issue is:open in:title,body Keyboard bug Focus lost')
   assert.equal(issueBodyDiff('old heading\nold detail\nkeep', 'new heading\nnew detail\nkeep'), '- old heading\n- old detail\n+ new heading\n+ new detail\n  keep')
-  assert.equal(rewriteIssueBody('Existing scope', 'New session context'), 'New session context')
+  assert.equal(rewriteIssueBody('Existing scope', 'New session context'), 'Existing scope\n\n<!-- githermes:issue-draft:start -->\nNew session context\n<!-- githermes:issue-draft:end -->')
+  assert.equal(rewriteIssueBody('Before\n\n<!-- githermes:issue-draft:start -->\nOld draft\n<!-- githermes:issue-draft:end -->\n\nAfter', 'New draft'), 'Before\n\n<!-- githermes:issue-draft:start -->\nNew draft\n<!-- githermes:issue-draft:end -->\n\nAfter')
 })
 
 test('duplicate search uses task content, finds a matching issue fixture, and omits template boilerplate', () => {
@@ -73,6 +88,11 @@ test('issue draft form always starts with a non-empty, secret-masked title', () 
   assert.equal(issueDraftTitle('Follow-up: keep the session draft'), 'Follow-up: keep the session draft')
   assert.equal(issueDraftTitle('token=super-secret-value-12345'), 'token=[REDACTED]')
   assert.equal(issueDraftTitle(''), 'Session issue draft')
+})
+
+test('duplicate issue title is redacted before it can be adopted into the form', () => {
+  const item = { title: 'Investigate token=super-secret-value-12345' }
+  assert.equal(redactIssueSecrets(item.title), 'Investigate token=[REDACTED]')
 })
 
 test('draft bodies use the required sections and secret-shaped values are masked before review', () => {
