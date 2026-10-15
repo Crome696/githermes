@@ -338,3 +338,18 @@ test('Cross-repo session-PR navigation keeps the just-set selection', () => {
   assert.ok(shell.includes('if (!reset.keepSelection) { $selPr.set(null); $selIssue.set(null) }'), 'selection clears unless the change is the armed navigation')
   assert.ok(shell.includes("$listQuery.set('')"), 'the shared filter resets on every repo change, navigation included')
 })
+
+test('Issue #13: issue drafts require duplicate review and explicit create/update with readback', () => {
+  const draft = source.slice(source.indexOf('function IssueDraftPanel'), source.indexOf('function SessionPrBanner'))
+  const pane = source.slice(source.indexOf('function GitHubPane'), source.indexOf('function GithubPage'))
+  assert.ok(draft.includes('Check duplicates'))
+  assert.ok(draft.includes('issueBodyDiff('), 'existing issue body diff must be shown before update')
+  assert.ok(draft.includes("write('create')") && draft.includes("write('update')"))
+  assert.ok(draft.includes('confirmedIssueWrite(') && draft.includes('originalBody: target?.body'))
+  assert.ok(draft.includes('insertComposerText(`Issue saved and read back: ${result.url}`)'))
+  assert.ok(draft.includes('redactIssueSecrets(body)'))
+  assert.ok(pane.includes("enabled: autoIssueSuggestions && !!activeId"), 'automatic detection must be opt-in')
+  assert.ok(pane.includes("pluginCtx?.storage.set('autoIssueSuggestions', next)"), 'automatic detection preference must persist')
+  assert.ok(source.includes("label: 'GitHub: Draft issue from this session'"), 'palette command must be registered')
+  assert.ok(source.includes("children: `Auto suggestions: ${autoIssueSuggestions ? 'on' : 'off'}`"))
+})
