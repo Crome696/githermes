@@ -1540,7 +1540,7 @@ export function parseDependencyTitle(title) {
     || text.match(/^(?:update|bump|upgrade)\s+(.+?)\s+to\s+v?([0-9]+(?:\.[0-9]+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/i)
   if (!match && !targetOnly) return null
   const [, name, from, to] = match || [null, targetOnly[1], null, targetOnly[2]]
-  const major = /\(major\)/i.test(title) ? true : from === null ? (/\bto\s+v\d/i.test(text) ? true : null) : Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
+  const major = /\(major\)/i.test(title) ? true : from === null ? (/\bto\s+v\d+(?![\d.])/i.test(text) ? true : null) : Number(from.match(/^\d+/)?.[0]) !== Number(to.match(/^\d+/)?.[0])
   return { package: name.trim().replace(/^[`'" ]+|[`'" ]+$/g, ''), from, to, major, security: /\[security\]/i.test(title) }
 }
 
