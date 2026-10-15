@@ -47,7 +47,7 @@ import {
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
 import { buildFinalizeQuery, decodeFinalizeResponse, finalizeMarkdown, finalizePollInterval } from './finalize.js'
-import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftFromMessages, issueDraftRepoFromText, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo, rewriteIssueBody } from './issue_draft.js'
+import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftFromMessages, issueDraftRepoFromText, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo, rewriteIssueBody } from './issue_draft.js'
 
 const ID = 'githermes'
 const PANE_ID = `${ID}:pane`
@@ -5082,7 +5082,7 @@ function IssueDetail({ repo, number, onBack, active = true }) {
 
 function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, onBack }) {
   const [repo, setRepo] = useState(resolveIssueDraftRepo({ sessionRepo, chatRepo: issueDraftRepoFromText(chatContext) || issueDraftRepoFromText(candidate) }))
-  const [title, setTitle] = useState('')
+  const [title, setTitle] = useState(issueDraftTitle(candidate))
   const [body, setBody] = useState(buildIssueDraftBody(candidate ? { goal: candidate } : {}))
   const [matches, setMatches] = useState([])
   const [selected, setSelected] = useState(null)
@@ -5146,6 +5146,8 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
       })
       setMessage(`Verified ${repo}#${result.number}: ${result.url}`)
       setCompleted({ action, number: result.number, url: result.url })
+      setChecked(false)
+      if (action === 'create') setMatches([])
       saved = true
       insertComposerText(`Issue saved and read back: ${result.url}`)
       await Promise.all([
@@ -5176,7 +5178,7 @@ function IssueDraftPanel({ sessionRepo, chatContext, candidate, sessionDraft, on
     matches.length ? jsxs('section', { className: 'space-y-2', children: [
       jsx('h3', { className: 'text-xs font-semibold', children: 'Possible open duplicates' }),
       ...matches.map(item => jsxs('button', { type: 'button', className: cn('w-full rounded border p-2 text-left text-xs', selected?.number === item.number ? 'border-(--ui-text-accent)' : 'border-(--ui-stroke-secondary)'), onClick: () => { draftEdited.current = true; setSelected(item); setTitle(item.title); setBody(rewriteIssueBody(redactIssueSecrets(item.body || ''), safeBody)); setChecked(true); setError('') }, children: [
-        jsx('span', { className: 'font-semibold', children: `${repo}#${item.number} ${item.title}` }),
+        jsx('span', { className: 'font-semibold', children: `${repo}#${item.number} ${redactIssueSecrets(item.title)}` }),
         jsx('span', { className: 'mt-1 block whitespace-pre-wrap text-(--ui-text-tertiary)', children: redactIssueSecrets(item.body || '').slice(0, 2000) }),
       ] }, item.number)),
       selected ? jsxs('div', { className: 'rounded border border-(--ui-stroke-secondary) p-2', children: [

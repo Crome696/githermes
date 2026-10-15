@@ -6,6 +6,7 @@ import {
   detectIssueDraftCandidate,
   duplicateSearchQuery,
   issueDraftRepoFromText,
+  issueDraftTitle,
   parseIssueDraftResponse,
   issueBodyDiff,
   rewriteIssueBody,
@@ -21,6 +22,11 @@ test('repo selection prefers the session repository, accepts an explicit chat re
   assert.equal(issueDraftRepoFromText('See https://github.com/other/project/pull/42'), 'other/project')
   assert.equal(resolveIssueDraftRepo({ chatRepo: issueDraftRepoFromText('See https://github.com/other/project/pull/42') }), 'other/project')
   assert.equal(issueDraftRepoFromText('There is no repository here'), '')
+  assert.equal(issueDraftRepoFromText('and/or'), '')
+  assert.equal(issueDraftRepoFromText('src/foo'), '')
+  assert.equal(issueDraftRepoFromText('See https://github.com/Crome696/githermes/issues/13.'), 'Crome696/githermes')
+  assert.equal(issueDraftRepoFromText('owner/repository'), 'owner/repository')
+  assert.equal(issueDraftRepoFromText('Repository: owner/repository'), 'owner/repository')
 })
 
 test('duplicate search is scoped to open issues and title/body; body rewrite diff shows additions and removals', () => {
@@ -61,6 +67,12 @@ test('assistant issue draft response is parsed into title and body for direct fo
     { role: 'assistant', text: 'Title: Old draft\n\nBody:\nOld body' },
     { role: 'user', text: 'Draft a GitHub issue from this session' },
   ]), null, 'a previous answer must not populate the form while the current request is unanswered')
+})
+
+test('issue draft form always starts with a non-empty, secret-masked title', () => {
+  assert.equal(issueDraftTitle('Follow-up: keep the session draft'), 'Follow-up: keep the session draft')
+  assert.equal(issueDraftTitle('token=super-secret-value-12345'), 'token=[REDACTED]')
+  assert.equal(issueDraftTitle(''), 'Session issue draft')
 })
 
 test('draft bodies use the required sections and secret-shaped values are masked before review', () => {

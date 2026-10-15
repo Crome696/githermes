@@ -10,10 +10,15 @@ export function resolveIssueDraftRepo({ sessionRepo, chatRepo } = {}) {
 
 export function issueDraftRepoFromText(text) {
   const value = String(text || '')
-  const url = value.match(/https?:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)/i)
-  const literal = value.match(/\b([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)\b/)
-  const match = url || literal
-  return match ? `${match[1]}/${match[2]}` : ''
+  const url = value.match(/https?:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\/|[?#\s.,;!)]|$)/i)
+  if (url) return `${url[1]}/${url[2].replace(/\.git$/i, '')}`
+  const literal = value.trim().match(/^(?:repository\s*:\s*)?([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)[.,;!]?$/i)
+  if (!literal) return ''
+  const owner = literal[1]
+  const repo = literal[2]
+  const pathRoots = new Set(['src', 'test', 'tests', 'lib', 'desktop', 'scripts', 'docs', 'assets', 'dist', 'build', 'packages', 'apps', 'components', 'node_modules'])
+  if ((owner.toLowerCase() === 'and' && repo.toLowerCase() === 'or') || pathRoots.has(owner.toLowerCase())) return ''
+  return `${owner}/${repo}`
 }
 
 export function redactIssueSecrets(value) {
@@ -42,6 +47,11 @@ export function buildIssueDraftBody({ goal = '', context = '', implementation = 
     '## Acceptance criteria', bullets(acceptance),
     '## References', references.map(value => String(value || '').trim()).filter(Boolean).join('\n') || 'Add relevant session, PR, or issue links.',
   ].join('\n\n')
+}
+
+export function issueDraftTitle(candidate = '') {
+  const firstLine = String(candidate || '').split(/\r?\n/).find(line => line.trim()) || ''
+  return redactIssueSecrets(firstLine.replace(/^\s*(?:[-*]\s*)?/, '').trim()).slice(0, 120) || 'Session issue draft'
 }
 
 export function duplicateSearchQuery(title, body) {
