@@ -46,6 +46,7 @@ import {
 } from '@hermes/plugin-sdk'
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
+import { buildFinalizeQuery, decodeFinalizeResponse, finalizeMarkdown, finalizePollInterval } from './finalize.js'
 
 const ID = 'githermes'
 const PANE_ID = `${ID}:pane`
@@ -92,6 +93,7 @@ const $prQueueSubmission = atom(null)
 const prQueueGoalReceipts = new WeakMap()
 const $queueSubmission = atom(null)
 const $queueActivity = atom(0)
+const $showFinalize = atom(false)
 const queueGoalInflight = new WeakMap()
 const queueGoalPlans = new WeakMap()
 const queueGoalReceipts = new WeakMap()
@@ -5187,9 +5189,56 @@ function useListKeyboardFlow(query) {
   return { searchRef, onKeyDown }
 }
 
+function useFinalizeQuery() {
+  const receipt = useValue($queueSubmission)
+  const assignments = useValue($botAssignments)
+  const items = receipt?.plan?.items || []
+  const stored = pluginCtx?.storage
+  const key = receipt?.stored_session_id || receipt?.session_id || receipt?.fingerprint || 'none'
+  const result = useQuery({
+    queryKey: [ID, 'finalize', key], enabled: items.length > 0,
+    queryFn: async () => {
+      const batches = []
+      for (let offset = 0; offset < items.length; offset += 50) {
+        const batch = items.slice(offset, offset + 50), request = buildFinalizeQuery(batch)
+        batches.push(decodeFinalizeResponse(await runAggregateGraphql(request), batch, assignments))
+      }
+      const rows = batches.flat(), updatedAt = new Date().toISOString()
+      stored?.set(`finalization:${key}`, { rows, updatedAt })
+      if (rows.length && finalizePollInterval(rows) === false && stored?.get(`finalization-notified:${key}`, false) !== true) {
+        stored?.set(`finalization-notified:${key}`, true)
+        host.notify?.({ kind: 'info', message: `Queue abgeschlossen: ${rows.length} Issues` })
+      }
+      return { rows, updatedAt }
+    },
+    initialData: stored?.get(`finalization:${key}`, undefined),
+    refetchInterval: query => finalizePollInterval(query.state.data?.rows),
+  })
+  return { receipt, items, result }
+}
+
+function FinalizePanel({ finalization }) {
+  const { receipt, items, result } = finalization
+  const rows = result.data?.rows || []
+  if (!items.length) return jsxs('div', { className: 'p-6', children: [jsx('h2', { className: 'text-lg font-semibold', children: 'Queue finalization' }), jsx(EmptyState, { title: 'No queue session available' })] })
+  const done = rows.filter(row => !['offen', 'in Arbeit', 'PR mit Failing Checks'].includes(row.state)).length
+  return jsxs('div', { className: 'flex h-full min-h-0 flex-col p-4 gap-3 overflow-auto', children: [
+    jsxs('div', { className: 'flex items-center justify-between', children: [jsx('h2', { className: 'text-lg font-semibold', children: 'Queue finalization' }), jsx(Button, { variant: 'ghost', size: 'sm', onClick: () => $showFinalize.set(false), children: 'Back' })] }),
+    result.error ? jsx(ErrorState, { title: 'Could not refresh queue status', error: result.error, onRetry: () => result.refetch() }) : null,
+    jsxs('div', { children: [jsx('div', { className: 'mb-1 text-sm', children: `${done}/${items.length} abgeschlossen` }), jsx('div', { role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': items.length, 'aria-valuenow': done, className: 'h-2 overflow-hidden rounded bg-(--ui-bg-quaternary)', children: jsx('div', { className: 'h-full bg-(--ui-text-accent)', style: { width: `${items.length ? done / items.length * 100 : 0}%` } }) })] }),
+    jsx('div', { className: 'flex justify-end', children: jsx(Button, { size: 'sm', onClick: () => insertComposerText(finalizeMarkdown(rows)), children: 'In Chat einfügen' }) }),
+    ...rows.map(row => {
+      const openLink = href => event => { const link = parseGithubLink(href); if (!link) return; event.preventDefault(); $showFinalize.set(false); navigateToGithubLink(link) }
+      return jsxs('div', { className: 'flex items-start justify-between gap-3 border-b border-(--ui-stroke-secondary) py-2 text-sm', children: [jsxs('div', { className: 'min-w-0', children: [jsx('a', { href: row.url, onClick: openLink(row.url), className: 'text-(--ui-text-accent) underline', children: `${row.repo}#${row.number}` }), jsx('div', { className: 'truncate text-(--ui-text-secondary)', children: row.title })] }), jsxs('div', { className: 'shrink-0 text-right', children: [jsx('div', { children: row.state }), row.pr ? jsx('a', { href: row.pr.url, onClick: openLink(row.pr.url), className: 'text-(--ui-text-accent) underline', children: `PR #${row.pr.number}` }) : null] })] }, `${row.repo}#${row.number}`)
+    }),
+  ] })
+}
+
 function GitHubPane() {
   const { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
   const paneVisible = useValue(paneVisibleAtom())
+  const showFinalize = useValue($showFinalize)
+  const finalization = useFinalizeQuery()
   const keyboard = useListKeyboardFlow(query)
 
   const prDraft = useValue($prQueue)
@@ -5197,6 +5246,7 @@ function GitHubPane() {
   const queueDraft = useValue($issueQueue)
   const showIssue = tab === 'issues' && selIssue != null && issueDetailAllowed(queueDraft)
 
+  if (showFinalize) return jsx(FinalizePanel, { finalization })
   if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, active: paneVisible, onBack: () => $selPr.set(null) })
   if (showIssue) return jsx(IssueDetail, { repo:selIssue.repo || repo, number:selIssue.number || selIssue, active: paneVisible, onBack: () => $selIssue.set(null) })
 
@@ -5424,6 +5474,10 @@ export default {
       area: PALETTE_AREA,
       data: { id: 'githermes.open-page', label: 'GitHub: Open page', keywords: ['github', 'page', 'pr', 'issue'], run: openGithubPage },
     })
+    ctx.register({ id: 'palette-finalize', area: PALETTE_AREA, data: {
+      id: 'githermes.finalize', label: 'GitHub: Queue finalization', keywords: ['github', 'queue', 'finalize', 'status'],
+      run: () => { $showFinalize.set(true); openGithubPane() },
+    } })
     ctx.register({
       id: 'palette-chat-links',
       area: PALETTE_AREA,
