@@ -45,8 +45,45 @@ export function buildIssueDraftBody({ goal = '', context = '', implementation = 
 }
 
 export function duplicateSearchQuery(title, body) {
-  const terms = `${String(title || '')} ${String(body || '')}`.replace(/[\r\n]+/g, ' ').trim().slice(0, 180)
+  const boilerplate = /^(?:describe the desired outcome\.?|add relevant session context\.?|describe the proposed implementation\.?|define acceptance criteria\.?|add relevant session, pr, or issue links\.?)$/i
+  const content = String(body || '').split(/\r?\n/)
+    .filter(line => !/^\s*#{1,6}\s+/.test(line))
+    .map(line => line.replace(/^\s*-\s*\[\s*\]\s*/, '').trim())
+    .filter(line => line && !boilerplate.test(line))
+  const parts = [String(title || '').trim().slice(0, 90), ...content]
+  const seen = new Set()
+  const terms = parts.map(part => part.replace(/\s+/g, ' ').trim())
+    .filter(part => {
+      const key = part.toLowerCase()
+      if (!key || seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).join(' ').slice(0, 180)
   return `is:issue is:open in:title,body ${terms}`
+}
+
+function messageText(message) {
+  return typeof message?.content === 'string' ? message.content
+    : Array.isArray(message?.content) ? message.content.map(part => typeof part === 'string' ? part : part?.text || '').join('\n')
+      : typeof message?.text === 'string' ? message.text : ''
+}
+
+export function parseIssueDraftResponse(messages) {
+  if (!Array.isArray(messages)) return null
+  const requestIndex = messages.findLastIndex(message =>
+    ['user', 'human'].includes(String(message?.role || message?.author || '').toLowerCase()) && /draft (?:a github )?issue/i.test(messageText(message)))
+  for (const message of messages.slice(Math.max(0, requestIndex + 1)).slice(-20).reverse()) {
+    if (!['assistant', 'bot', 'model'].includes(String(message?.role || message?.author || '').toLowerCase())) continue
+    const text = redactIssueSecrets(messageText(message)).trim()
+    const match = text.match(/(?:^|\n)\s*(?:\*\*)?Title(?:\*\*)?\s*:\s*(.+?)\s*(?:\n+|$)(?:\s*(?:\*\*)?Body(?:\*\*)?\s*:\s*\n?)([\s\S]+)$/i)
+    if (match && match[1].trim() && match[2].trim()) return { title: match[1].trim(), body: match[2].trim() }
+  }
+  return null
+}
+
+export function issueDraftFromMessages(messages) {
+  if (!Array.isArray(messages)) return ''
+  return messages.slice(-30).map(messageText).filter(Boolean).join('\n')
 }
 
 export function detectIssueDraftCandidate(messages) {
@@ -77,10 +114,7 @@ export function issueBodyDiff(before, after) {
 }
 
 export function rewriteIssueBody(existing, draft) {
-  const prior = String(existing || '').trim()
-  const next = String(draft || '').trim()
-  if (!prior || next.includes(prior)) return next
-  return `${prior}\n\n---\n\n## Session update\n\n${next}`
+  return String(draft || '').trim()
 }
 
 export async function confirmedIssueWrite({ action, confirmed, repo, title, body, number, originalTitle, originalBody, readIssue, createIssue, updateIssue }) {

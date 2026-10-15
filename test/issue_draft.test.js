@@ -6,6 +6,7 @@ import {
   detectIssueDraftCandidate,
   duplicateSearchQuery,
   issueDraftRepoFromText,
+  parseIssueDraftResponse,
   issueBodyDiff,
   rewriteIssueBody,
   redactIssueSecrets,
@@ -17,13 +18,48 @@ test('repo selection prefers the session repository, accepts an explicit chat re
   assert.equal(resolveIssueDraftRepo({ chatRepo: 'other/repo' }), 'other/repo')
   assert.equal(resolveIssueDraftRepo({ sessionRepo: 'bad; gh issue create', chatRepo: '' }), '')
   assert.equal(issueDraftRepoFromText('See https://github.com/Crome696/githermes/issues/13'), 'Crome696/githermes')
+  assert.equal(issueDraftRepoFromText('See https://github.com/other/project/pull/42'), 'other/project')
+  assert.equal(resolveIssueDraftRepo({ chatRepo: issueDraftRepoFromText('See https://github.com/other/project/pull/42') }), 'other/project')
   assert.equal(issueDraftRepoFromText('There is no repository here'), '')
 })
 
 test('duplicate search is scoped to open issues and title/body; body rewrite diff shows additions and removals', () => {
   assert.equal(duplicateSearchQuery('Keyboard bug', 'Focus lost'), 'is:issue is:open in:title,body Keyboard bug Focus lost')
   assert.equal(issueBodyDiff('old heading\nold detail\nkeep', 'new heading\nnew detail\nkeep'), '- old heading\n- old detail\n+ new heading\n+ new detail\n  keep')
-  assert.equal(rewriteIssueBody('Existing scope', 'New session context'), 'Existing scope\n\n---\n\n## Session update\n\nNew session context')
+  assert.equal(rewriteIssueBody('Existing scope', 'New session context'), 'New session context')
+})
+
+test('duplicate search uses task content, finds a matching issue fixture, and omits template boilerplate', () => {
+  const title = 'Keep issue draft in the active Hermes session'
+  const body = buildIssueDraftBody({
+    goal: 'Persist a session issue draft after a model response',
+    context: 'The pane currently loses the proposed title and body.',
+    implementation: 'Read assistant history and populate the form once.',
+    acceptance: ['The returned draft appears without copy and paste.'],
+  })
+  const query = duplicateSearchQuery(title, body)
+  const fixture = { title, body: 'Persist a session issue draft after a model response. The pane currently loses the proposed title and body. Read assistant history and populate the form once. The returned draft appears without copy and paste.', state: 'OPEN' }
+  const terms = query.replace(/^is:issue is:open in:title,body\s*/, '').toLowerCase().split(/\s+/).filter(Boolean)
+  assert.ok(terms.length > 0)
+  assert.ok(terms.every(term => `${fixture.title} ${fixture.body}`.toLowerCase().includes(term)), `fixture did not match terms: ${terms.join(', ')}`)
+  for (const boilerplate of ['## Goal', '## Context', '## Implementation', '## Acceptance criteria', '## References', 'Describe the desired outcome', 'Add relevant session context', 'Add relevant session, PR, or issue links']) {
+    assert.ok(!query.includes(boilerplate), `query contains template boilerplate: ${boilerplate}`)
+  }
+  assert.equal(duplicateSearchQuery('Useful title', buildIssueDraftBody({})), 'is:issue is:open in:title,body Useful title')
+})
+
+test('assistant issue draft response is parsed into title and body for direct form adoption', () => {
+  assert.deepEqual(parseIssueDraftResponse([
+    { role: 'user', text: 'Draft an issue' },
+    { role: 'assistant', text: 'Title: Preserve the issue draft\n\nBody:\n## Goal\nKeep the proposed issue in the pane.\n\n## Acceptance criteria\n- [ ] No copy and paste' },
+  ]), {
+    title: 'Preserve the issue draft',
+    body: '## Goal\nKeep the proposed issue in the pane.\n\n## Acceptance criteria\n- [ ] No copy and paste',
+  })
+  assert.equal(parseIssueDraftResponse([
+    { role: 'assistant', text: 'Title: Old draft\n\nBody:\nOld body' },
+    { role: 'user', text: 'Draft a GitHub issue from this session' },
+  ]), null, 'a previous answer must not populate the form while the current request is unanswered')
 })
 
 test('draft bodies use the required sections and secret-shaped values are masked before review', () => {
