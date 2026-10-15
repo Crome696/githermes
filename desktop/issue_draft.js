@@ -1,4 +1,17 @@
 const REPO = /^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/
+const PATH_ROOTS = new Set(['src', 'test', 'tests', 'lib', 'desktop', 'scripts', 'docs', 'assets', 'dist', 'build', 'packages', 'apps', 'components', 'node_modules'])
+const NON_REPO_PAIRS = new Set(['and/or', 'tcp/ip', 'i/o', 'km/h'])
+
+function isRepoMention(owner, repo, text, start) {
+  const before = text[start - 1] || ''
+  const end = start + owner.length + 1 + repo.length
+  const after = text[end] || ''
+  if (before === '/' || before === '.' || after === '/') return false
+  if (PATH_ROOTS.has(owner.toLowerCase())) return false
+  if (NON_REPO_PAIRS.has(`${owner}/${repo}`.toLowerCase())) return false
+  if (/^\d+$/.test(owner) && /^\d+$/.test(repo)) return false
+  return true
+}
 
 export function resolveIssueDraftRepo({ sessionRepo, chatRepo } = {}) {
   for (const value of [sessionRepo, chatRepo]) {
@@ -16,8 +29,7 @@ export function issueDraftRepoFromText(text) {
   if (!literal) return ''
   const owner = literal[1]
   const repo = literal[2]
-  const pathRoots = new Set(['src', 'test', 'tests', 'lib', 'desktop', 'scripts', 'docs', 'assets', 'dist', 'build', 'packages', 'apps', 'components', 'node_modules'])
-  if ((owner.toLowerCase() === 'and' && repo.toLowerCase() === 'or') || pathRoots.has(owner.toLowerCase())) return ''
+  if (PATH_ROOTS.has(owner.toLowerCase()) || NON_REPO_PAIRS.has(`${owner}/${repo}`.toLowerCase())) return ''
   return `${owner}/${repo}`
 }
 
@@ -30,12 +42,11 @@ export function issueDraftRepoFromMessages(messages) {
     const urlPattern = /https?:\/\/github\.com\/([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)(?=\/|[?#\s.,;!)]|$)/gi
     for (const match of text.matchAll(urlPattern)) candidates.add(`${match[1]}/${match[2].replace(/\.git$/i, '').replace(/[.,;!]+$/, '')}`)
     const withoutUrls = text.replace(/https?:\/\/github\.com\/[^\s]*/gi, ' ')
-    const literalPattern = /\b([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)\b/g
-    const pathRoots = new Set(['src', 'test', 'tests', 'lib', 'desktop', 'scripts', 'docs', 'assets', 'dist', 'build', 'packages', 'apps', 'components', 'node_modules'])
+    const literalPattern = /(?<![A-Za-z0-9_./-])([A-Za-z0-9][A-Za-z0-9-]*)\/([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?)(?![A-Za-z0-9_./-])/g
     for (const match of withoutUrls.matchAll(literalPattern)) {
       const owner = match[1]
       const repo = match[2]
-      if ((owner.toLowerCase() === 'and' && repo.toLowerCase() === 'or') || pathRoots.has(owner.toLowerCase())) continue
+      if (!isRepoMention(owner, repo, withoutUrls, match.index)) continue
       candidates.add(`${owner}/${repo}`)
     }
     if (candidates.size) return candidates.size === 1 ? [...candidates][0] : ''
@@ -131,8 +142,8 @@ export function detectIssueDraftCandidate(messages) {
 }
 
 export function issueBodyDiff(before, after) {
-  const oldLines = String(before || '').split(/\r?\n/)
-  const newLines = String(after || '').split(/\r?\n/)
+  const oldLines = normalizeLineEndings(before).split('\n')
+  const newLines = normalizeLineEndings(after).split('\n')
   let prefix = 0
   while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++
   let suffix = 0
@@ -146,8 +157,8 @@ export function issueBodyDiff(before, after) {
 }
 
 export function rewriteIssueBody(existing, draft) {
-  const body = String(existing || '')
-  const content = String(draft || '').trim()
+  const body = normalizeLineEndings(existing)
+  const content = normalizeLineEndings(draft).trim()
   const start = '<!-- githermes:issue-draft:start -->'
   const end = '<!-- githermes:issue-draft:end -->'
   const startIndex = body.indexOf(start)
@@ -160,7 +171,12 @@ export function rewriteIssueBody(existing, draft) {
 }
 
 export function issueDraftFinalBody(selected, draftContent) {
-  return rewriteIssueBody(redactIssueSecrets(selected?.body || ''), draftContent)
+  return rewriteIssueBody(redactIssueSecrets(selected?.body || ''), redactIssueSecrets(draftContent || ''))
+}
+
+function normalizeLineEndings(value) {
+  const carriageReturn = String.fromCharCode(13)
+  return String(value || '').replaceAll(`${carriageReturn}\n`, '\n').replaceAll(carriageReturn, '\n')
 }
 
 export async function confirmedIssueWrite({ action, confirmed, repo, title, body, number, originalTitle, originalBody, readIssue, createIssue, updateIssue }) {
