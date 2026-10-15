@@ -24,6 +24,9 @@ test('dependency title parser extracts package, version jump, major and security
   assert.deepEqual(parseDependencyTitle('Update dependency @angular/router from 22.1.0 to 23.0.0'), {
     package: '@angular/router', from: '22.1.0', to: '23.0.0', major: true, security: false,
   })
+  assert.equal(parseDependencyTitle('Update dependency react from 1.4.0 to v2.0.0').major, true)
+  assert.equal(parseDependencyTitle('Update dependency react from 2.0.0 to v1.4.0').major, false)
+  assert.equal(parseDependencyTitle('Update dependency react from 1.4.0 to 1.5.0 (major)').major, true)
   assert.deepEqual(parseDependencyTitle('[SECURITY] Bump lodash from 4.17.20 to 4.17.21'), {
     package: 'lodash', from: '4.17.20', to: '4.17.21', major: false, security: true,
   })
@@ -37,6 +40,7 @@ test('target-only vN without a minor version is major; dotted versions stay unse
   assert.equal(parseDependencyTitle('Update dependency react to v19').major, true)
   assert.equal(parseDependencyTitle('Update dependency react to v22.10.2').major, null)
   assert.equal(parseDependencyTitle('Update dependency react to v1.2').major, null)
+  assert.equal(parseDependencyTitle('Update dependency react to v1.2.3').major, null)
   assert.equal(parseDependencyTitle('Update dependency react from 18.2.0 to 18.3.0 (major)').major, true)
   assert.equal(parseDependencyTitle('Update dependency react to 19.0.0').major, null)
   assert.deepEqual([...plugin.dependencyMergeSelection([
