@@ -44,6 +44,23 @@ test('chat repo resolution leaves same-message ties unresolved for the user', ()
   ]), '')
 })
 
+test('chat repo resolution rejects slash-shaped prose, paths, and dates without losing explicit repositories', () => {
+  for (const text of [
+    'TCP/IP is enabled.',
+    'Choose one and/or the other.',
+    'I/O is configured.',
+    'Measure speed in km/h.',
+    'See src/foo for the implementation.',
+    'The file is ./owner/repo/config.json.',
+    'The checkout is C:/Users/alice/project.',
+    'Release date: 2026/10/15.',
+  ]) {
+    assert.equal(issueDraftRepoFromMessages([{ role: 'user', content: text }]), '', text)
+  }
+  assert.equal(issueDraftRepoFromMessages([{ role: 'user', content: 'Use owner/repository for this.' }]), 'owner/repository')
+  assert.equal(issueDraftRepoFromMessages([{ role: 'user', content: 'Use https://github.com/owner/repository/issues/2.' }]), 'owner/repository')
+})
+
 test('duplicate search is scoped to open issues and title/body; body rewrite diff shows additions and removals', () => {
   assert.equal(duplicateSearchQuery('Keyboard bug', 'Focus lost'), 'is:issue is:open in:title,body Keyboard bug Focus lost')
   assert.equal(issueBodyDiff('old heading\nold detail\nkeep', 'new heading\nnew detail\nkeep'), '- old heading\n- old detail\n+ new heading\n+ new detail\n  keep')
@@ -71,6 +88,32 @@ test('Issue #13 R4: duplicate update preview and write use the same final body',
     assert.equal(issueBodyDiff(existing, finalBody), issueBodyDiff(existing, calls[0]), `${name}: reviewed diff must match written body`)
     assert.equal(calls[0], finalBody, `${name}: exact reviewed body must be written`)
   }
+})
+
+test('duplicate update normalizes CRLF and LF bodies to the same reviewed diff and written LF body', async () => {
+  const lfExisting = 'Before\n\n<!-- githermes:issue-draft:start -->\nOld draft\n<!-- githermes:issue-draft:end -->\n\nAfter'
+  const cr = String.fromCharCode(13)
+  const crlfExisting = lfExisting.replaceAll('\n', `${cr}\n`)
+  const expected = 'Before\n\n<!-- githermes:issue-draft:start -->\nNew draft\n<!-- githermes:issue-draft:end -->\n\nAfter'
+  const results = []
+
+  for (const existing of [lfExisting, crlfExisting]) {
+    const finalBody = issueDraftFinalBody({ body: existing }, 'New draft')
+    const calls = []
+    let stored = { number: 7, title: 'Existing', body: existing }
+    await confirmedIssueWrite({
+      action: 'update', confirmed: true, repo: 'owner/repo', title: 'Existing', body: finalBody,
+      number: 7, originalTitle: 'Existing', originalBody: existing,
+      readIssue: async () => ({ ...stored }),
+      updateIssue: async (_repo, _number, _title, body) => { calls.push(body); stored.body = body },
+    })
+    assert.equal(finalBody, expected)
+    assert.equal(calls[0].includes(cr), false)
+    assert.equal(issueBodyDiff(existing, finalBody), issueBodyDiff(existing.split(cr).join(''), expected))
+    assert.equal(calls[0], finalBody)
+    results.push({ diff: issueBodyDiff(existing, finalBody), body: calls[0] })
+  }
+  assert.deepEqual(results[0], results[1])
 })
 
 test('Issue #13 R4: switching duplicate selection replaces A context with B context', () => {
@@ -158,4 +201,57 @@ test('GitHub writes require explicit confirmation, update checks the reviewed bo
   assert.equal(updated.body, 'after')
   await assert.rejects(confirmedIssueWrite({ action: 'update', confirmed: true, repo: 'a/b', title: 'Lost edit', body: 'after', number: 7, originalTitle: 'Old', originalBody: 'stale', ...api }), /changed since review/)
   assert.equal(calls.filter(call => call === 'update').length, 1)
+})
+
+test('redactIssueSecrets masks supported credential forms recursively and leaves ordinary text unchanged', () => {
+  const privateKey = ['-----BEGIN RSA PRIVATE KEY-----', 'private-key-material', '-----END RSA PRIVATE KEY-----'].join('\\n')
+  const input = {
+    title: 'Deploy token=super-secret-value-12345',
+    body: [
+      'ghp_1234567890abcdefghijklmnopqrstuv',
+      'AKIA1234567890ABCDEF',
+      'eyJhbGciOiJub25lIn0.eyJzdWIiOiIxMjMifQ.signature',
+      'Authorization: Bearer very-secret-bearer-value',
+      'https://alice:password@example.com/path?access_token=secret-value',
+      privateKey,
+      'ordinary issue text and owner/repository stay readable',
+    ],
+  }
+  const redacted = redactIssueSecrets(input)
+  assert.equal(redacted.title, 'Deploy token=[REDACTED]')
+  assert.equal(redacted.body[0], '[REDACTED]')
+  assert.equal(redacted.body[1], '[REDACTED]')
+  assert.equal(redacted.body[2], '[REDACTED JWT]')
+  assert.equal(redacted.body[3], 'Authorization: [REDACTED]')
+  assert.equal(redacted.body[4], 'https://[REDACTED]@example.com/path?access_token=[REDACTED]')
+  assert.equal(redacted.body[5], '[REDACTED PRIVATE KEY]')
+  assert.equal(redacted.body[6], input.body[6])
+})
+
+test('duplicate title and body are both masked before update review and write', async () => {
+  const duplicate = {
+    title: 'Fix token=title-secret-value-12345',
+    body: 'Existing context password=body-secret-value-12345\nKeep this older context.',
+  }
+  const reviewedTitle = redactIssueSecrets(duplicate.title)
+  const reviewedBody = issueDraftFinalBody(duplicate, 'New content token=draft-secret-value-12345')
+  assert.equal(reviewedTitle, 'Fix token=[REDACTED]')
+  assert.ok(reviewedBody.includes('password=[REDACTED]'))
+  assert.ok(reviewedBody.includes('Keep this older context.'))
+  assert.ok(reviewedBody.includes('token=[REDACTED]'))
+  assert.ok(![reviewedTitle, reviewedBody].join('\n').includes('secret-value'))
+
+  let storedTitle = duplicate.title
+  let storedBody = duplicate.body
+  let writtenBody = ''
+  await confirmedIssueWrite({
+    action: 'update', confirmed: true, repo: 'owner/repo', title: reviewedTitle, body: reviewedBody,
+    number: 7, originalTitle: duplicate.title, originalBody: duplicate.body,
+    readIssue: async () => ({ number: 7, title: storedTitle, body: storedBody, state: 'OPEN' }),
+    updateIssue: async (_repo, _number, title, body) => { storedTitle = title; writtenBody = body; storedBody = body },
+  })
+  assert.equal(writtenBody, reviewedBody)
+  assert.ok(writtenBody.includes('password=[REDACTED]'))
+  assert.ok(writtenBody.includes('Keep this older context.'))
+  assert.ok(!writtenBody.includes('body-secret-value'))
 })
