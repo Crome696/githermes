@@ -17,12 +17,10 @@ test('plugin update checks target the CromeSDK-Plugins repository', () => {
     assert.equal(target, 'PLUGIN_REPO', 'every compare target must use PLUGIN_REPO')
   }
 
-  const repoLiterals = [
-    ...source.matchAll(/github\.com\/([^/'"\s]+)\/githermes/gi),
-    ...source.matchAll(/repos\/([^/'"\s]+)\/githermes/gi),
-  ]
-  for (const [, owner] of repoLiterals) {
-    assert.equal(owner.toLowerCase(), 'cromesdk-plugins', `unexpected githermes owner: ${owner}`)
+  const literalCompareTargets = [...source.matchAll(/repos\/([^/'"`\s$]+)\/([^/'"`\s$]+)\/compare\b/g)]
+  const literalGitHubUrls = [...source.matchAll(/https?:\/\/github\.com\/([^/'"`\s$]+)\/[^'"`\s]*/gi)]
+  for (const [, owner] of [...literalCompareTargets, ...literalGitHubUrls]) {
+    assert.equal(owner.toLowerCase(), 'cromesdk-plugins', `unexpected GitHub owner: ${owner}`)
   }
 })
 
