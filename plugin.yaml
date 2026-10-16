@@ -5,7 +5,7 @@ manifest_version: 1
 requires_hermes: ">=0.21.7"
 author: Crome696
 license: MIT
-homepage: https://github.com/Crome696/githermes
+homepage: https://github.com/CromeSDK-Plugins/githermes
 capabilities: []
 kind: standalone
 requires_env: []

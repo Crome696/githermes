@@ -2,8 +2,9 @@
   "name": "githermes",
   "version": "0.6.0",
   "author": "Crome696",
-  "homepage": "https://github.com/Crome696/githermes",
-  "repository": { "type": "git", "url": "https://github.com/Crome696/githermes.git" },
+  "homepage": "https://github.com/CromeSDK-Plugins/githermes",
+  "repository": { "type": "git", "url": "https://github.com/CromeSDK-Plugins/githermes.git" },
+  "bugs": { "url": "https://github.com/CromeSDK-Plugins/githermes/issues" },
   "type": "module",
   "scripts": {
     "pretest": "node scripts/bootstrap-stubs.mjs",
