@@ -48,6 +48,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { jsx, jsxs, Fragment } from 'react/jsx-runtime'
 import { buildFinalizeQuery, decodeFinalizeResponse, finalizeMarkdown, finalizePollInterval } from './finalize.js'
 import { buildIssueDraftBody, confirmedIssueWrite, detectIssueDraftCandidate, duplicateSearchQuery, issueBodyDiff, issueDraftFinalBody, issueDraftRepoFromMessages, issueDraftTitle, parseIssueDraftResponse, redactIssueSecrets, resolveIssueDraftRepo } from './issue_draft.js'
+import { createMetricsController, noteGoalReceipt } from './goal_metrics_runtime.js'
+import { $goalMetrics, $showGoalMetrics, GoalReceiptMetrics, GoalMetricsOverview, GoalMetricsSettings, setMetricsController } from './goal_metrics_ui.js'
 
 const ID = 'githermes'
 const PANE_ID = `${ID}:pane`
@@ -554,6 +556,7 @@ function startQueueGoal(api, plan, { storage, onState, kind, guard = async () =>
     if (!state || state.fingerprint !== fingerprint) state = { version: 1, fingerprint, plan, stage: 'prepared', idempotencyKey: `githermes-queue-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
     const save = update => {
       state = { ...state, ...update }; receipts.set(storage, state); onState(state); storage.set(receiptKey, state)
+      noteGoalReceipt(storage, state, kind, api, metricsOwner)
       if (kind === 'fix') {
         const history = storage.get('fixChecksGoalHistory', [])
         storage.set('fixChecksGoalHistory', [state, ...history.filter(value => value.plan.headKey !== plan.headKey)])
@@ -561,6 +564,7 @@ function startQueueGoal(api, plan, { storage, onState, kind, guard = async () =>
     }
     // Capture the actual gateway before opening a tab can change the active one.
     const gateway = api.getGateway?.()
+    const metricsOwner = { gateway, connection: api.state?.connectionId?.get?.() || 'local', profile: api.state?.profile?.get?.() || plan.profile }
     const request = gateway?.request ? gateway.request.bind(gateway) : api.request.bind(api)
     if (state.stage === 'creating') throw new Error('Session-Erstellung hatte ein unbestätigtes Ergebnis. Kein automatischer Neustart: vorhandene Session in Hermes prüfen, um Duplikate zu vermeiden.')
     const execution = queueExecutionOptions(plan.execution)
@@ -1845,6 +1849,7 @@ function FixChecksAction({ repo, number, rollup, incomplete = false, state = 'op
   return jsxs('div', { onClick: e => e.stopPropagation(), onKeyDown: e => e.stopPropagation(), className: 'mt-2 text-xs', children: [
     failed && String(state).toLowerCase() === 'open' ? jsx(Button, { size: 'sm', variant: 'outline', onClick: () => setOpen(true), children: 'Fix failing checks' }) : null,
     receipt ? jsx('p', { role: 'status', children: observable.isError ? 'Fortschritt nicht abrufbar; vorhandene Session prüfen' : observable.data?.label || 'Session-Handoff gespeichert' }) : null,
+    receipt ? jsx(GoalReceiptMetrics, { receipt, kind: 'fix' }) : null,
     receipt?.stored_session_id ? jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => host.openSession(receipt.stored_session_id, { profile: receipt.plan.profile, intent: 'tab' }), children: 'Fix-Session öffnen' }) : null,
     open ? jsx(FixChecksDialog, { repo, number, onClose: () => setOpen(false) }) : null,
   ] })
@@ -4320,7 +4325,7 @@ function QueueExecution({ currentProfile, profiles, options, change, disabled, e
 }
 function QueueStatus({ error, submission, pending }) {
   const labels = { prepared: 'Vorbereitet', creating: 'Session wird erstellt', created: 'Session erstellt', 'goal-dispatching': 'Goal wird bestätigt', 'goal-ready': 'Goal bestätigt', submitting: 'Kickoff wird übergeben', submitted: 'Kickoff übergeben', complete: 'Session/Goal bestätigt; Modellfortschritt in der Session prüfen.' }
-  return jsx('p', { role: error ? 'alert' : 'status', 'data-queue-status': error ? 'error' : submission?.stage || 'prepared', className: 'mt-2 text-xs', children: error || labels[submission?.stage] || (pending ? 'Start wird geprüft' : 'Goal vorbereitet') })
+  return jsxs('div', { children: [jsx('p', { role: error ? 'alert' : 'status', 'data-queue-status': error ? 'error' : submission?.stage || 'prepared', className: 'mt-2 text-xs', children: error || labels[submission?.stage] || (pending ? 'Start wird geprüft' : 'Goal vorbereitet') }), jsx(GoalReceiptMetrics, { receipt: submission })] })
 }
 function IssueQueueEditor({ draft, change, error, busy }) {
   const [dragging, setDragging] = useState(null)
@@ -5530,6 +5535,7 @@ function GitHubPane() {
   const { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
   const paneVisible = useValue(paneVisibleAtom())
   const showFinalize = useValue($showFinalize)
+  const showGoalMetrics = useValue($showGoalMetrics)
   const showIssueDraft = useValue($showIssueDraft)
   const autoIssueSuggestions = useValue($autoIssueSuggestions)
   const issueDraftCandidate = useValue($issueDraftCandidate)
@@ -5561,6 +5567,7 @@ function GitHubPane() {
     else $issueDraftCandidate.set(null)
   }, [detectedCandidate])
 
+  if (showGoalMetrics) return jsx(GoalMetricsOverview, { onClose: () => $showGoalMetrics.set(false) })
   if (showFinalize) return jsx(FinalizePanel, { finalization })
   if (showIssueDraft) return jsx(IssueDraftPanel, { sessionRepo: sessionGit.data?.repo, chatMessages: historyQ.data, candidate: issueDraftCandidate, sessionDraft, onBack: () => $showIssueDraft.set(false) })
   if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, active: paneVisible, onBack: () => $selPr.set(null) })
@@ -5591,6 +5598,7 @@ function GitHubPane() {
                 : jsx('div', { className: 'min-w-0 flex-1', children: jsx(RepoPicker, { repos: repoOptions, owners:ownersQ.data?.owners, value: repo, onChange: v => $repo.set(v) }) }),
               jsx(Button, { variant: 'ghost', size: 'sm', className: 'h-7 w-7 p-0 ml-auto', onClick: () => queryClient.invalidateQueries({ queryKey: [ID] }), 'aria-label': 'Refresh GitHub data', children: jsx(icons.RefreshCw, { className: 'size-3' }) }),
               jsx(Button, { variant: 'ghost', size: 'sm', className: 'h-7 px-2 text-[11px]', onClick: () => { $issueDraftCandidate.set(null); $showIssueDraft.set(true) }, children: 'Draft issue' }),
+              jsx(Button, { variant: 'ghost', size: 'sm', onClick: () => $showGoalMetrics.set(true), children: 'Goal-Verbrauch' }),
               jsx(Button, { variant: 'ghost', size: 'sm', className: 'h-7 px-2 text-[10px]', 'aria-pressed': autoIssueSuggestions, onClick: () => {
                 const next = !autoIssueSuggestions
                 $autoIssueSuggestions.set(next)
@@ -5635,11 +5643,13 @@ function GitHubPane() {
 function GithubPage() {
   const { reposQ, ownersQ, repo, repoOptions, tab, query, selPr, selIssue } = useGitHubShellState()
   const keyboard = useListKeyboardFlow(query)
+  const showGoalMetrics = useValue($showGoalMetrics)
 
   const prDraft = useValue($prQueue)
   const showPr = tab === 'prs' && selPr != null && prDetailAllowed(prDraft)
   const queueDraft = useValue($issueQueue)
   const showIssue = tab === 'issues' && selIssue != null && issueDetailAllowed(queueDraft)
+  if (showGoalMetrics) return jsx(GoalMetricsOverview, { onClose: () => $showGoalMetrics.set(false) })
   if (showPr) return jsx(PrDetail, { repo:selPr.repo || repo, number:selPr.number || selPr, onBack: () => $selPr.set(null) })
   if (showIssue) return jsx(IssueDetail, { repo:selIssue.repo || repo, number:selIssue.number || selIssue, onBack: () => $selIssue.set(null) })
 
@@ -5665,6 +5675,7 @@ function GithubPage() {
                   jsx('span', { className: 'text-xs text-(--ui-text-quaternary)', children: scopeLabel(repo) || '—' }),
                   jsx(Button, { variant: 'ghost', size: 'sm', className: 'ml-auto h-7 w-7 p-0', onClick: () => queryClient.invalidateQueries({ queryKey: [ID] }), 'aria-label': 'Refresh', children: jsx(icons.RefreshCw, { className: 'size-3' }) }),
                   jsx(Button, { variant: 'ghost', size: 'sm', className: 'h-7 px-2 text-xs', onClick: openGithubPane, children: 'Open pane' }),
+                  jsx(Button, { variant: 'ghost', size: 'sm', onClick: () => $showGoalMetrics.set(true), children: 'Goal-Verbrauch' }),
                 ],
               }),
               reposQ.isLoading
@@ -5710,6 +5721,18 @@ export default {
   name: 'GitHermes',
   register(ctx) {
     pluginCtx = ctx
+    const metrics = createMetricsController(host, ctx.storage, { onChange: value => $goalMetrics.set(value) })
+    setMetricsController(metrics)
+    ctx.onDispose?.(() => { metrics.dispose(); setMetricsController(null) })
+    // Legacy receipts lack owning connection/gateway provenance. Do not guess
+    // ownership or retroactively manufacture usage for pre-install Goals.
+    void metrics.refresh()
+    if (typeof ctx.registerSettingsPage === 'function') ctx.registerSettingsPage({ id: 'goal-metrics', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
+    else ctx.register({ id: 'goal-metrics-settings', area: 'settings.plugins', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
+    ctx.register({ id: 'palette-goal-metrics', area: PALETTE_AREA, data: {
+      id: 'githermes.goal-metrics', label: 'GitHub: Goal-Verbrauch', keywords: ['github', 'goal', 'tokens', 'cost', 'usage'],
+      run: () => { $showGoalMetrics.set(true); openGithubPane() },
+    } })
     // Start the shared probe; shellCommand awaits it before any command runs.
     resolveBash().catch(() => {}) // The next query surfaces the error with Retry.
     const saved = ctx.storage.get('repo')
