@@ -77,6 +77,7 @@ export function GoalMetricsOverview({ onClose }) {
 export function GoalMetricsSettings() {
   const { prices } = useValue($goalMetrics)
   const [draft, setDraft] = useState(() => JSON.stringify(prices, null, 2)), [message, setMessage] = useState('')
+  useEffect(() => { setDraft(JSON.stringify(prices, null, 2)); setMessage('') }, [prices])
   return jsxs('section', { 'aria-label': 'GitHermes Preistabelle', className: 'p-3', children: [
     jsx('h3', { children: 'GitHermes · Goal-Kosten' }),
     jsx('p', { children: 'USD pro Million Tokens. Keine Preise vorgegeben. provider kann leer sein (alle Provider dieses Modells). input, output, cacheRead und cacheWrite sind Zahlen oder null (kein Preis). Datum pro Modell: YYYY-MM-DD. Hermes-Kosten haben Vorrang; Tabellenwerte sind geschätzt. Fehlende Cache-Zähler ergeben nur eine ausdrücklich markierte Teilsumme, keine erfundenen Cache-Kosten.' }),
