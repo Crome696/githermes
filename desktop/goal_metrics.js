@@ -60,10 +60,17 @@ export function updateMetric(record, { usage, control, info, now = Date.now() / 
   if (usage !== undefined) {
     const snapshot = usageSnapshot(usage)
     // Counters are cumulative. Replace (do not sum or max); a reset must not leave
-    // old usage masquerading as the new runtime's counters.
-    next.tokens = snapshot
-    next.cost = hermesCost(usage)
-    next.observedAt = time(now)
+    // old usage masquerading as the new runtime's counters. But an empty/null
+    // snapshot carries no new observation and must not erase recorded totals.
+    const rawUsage = usage?.usage && typeof usage.usage === 'object' ? usage.usage : usage
+    const hasTokenObservation = TOKEN_KEYS.some(key => snapshot[key] !== null) ||
+      ['input', 'input_tokens', 'output', 'output_tokens', 'reasoning', 'reasoning_tokens', 'cache_read', 'cache_read_tokens', 'cache_write', 'cache_write_tokens'].some(key => typeof rawUsage?.[key] === 'number')
+    const reportedCost = hermesCost(usage)
+    if (hasTokenObservation || reportedCost) {
+      next.tokens = snapshot
+      next.cost = reportedCost
+      next.observedAt = time(now)
+    }
   }
   const goal = control?.control?.goal ?? control?.goal
   if (goal) {

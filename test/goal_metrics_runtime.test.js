@@ -72,6 +72,23 @@ test('storage failure is surfaced, cannot overwrite last durable metric, and doe
   assert.deepEqual(f.data.get(METRICS_KEY), stored); assert.ok(f.snapshots.at(-1).error)
   f.controller.dispose()
 })
+test('null usage RPC response does not erase previously observed cumulative tokens', async () => {
+  const f = fixture(); f.controller.track(receipt(), 'issue')
+  await f.controller.refresh()
+  const before = f.controller.records[0]
+  f.api.getGateway = () => ({ request: async method => {
+    if (method === 'session.active_list') return { sessions: [{ session_key: 'stored', id: 'runtime' }] }
+    if (method === 'session.control.read') return { control: { goal: { status: 'active', created_at: 100 } } }
+    if (method === 'session.usage') return { input: null, output: null, reasoning: null, cache_read: null, cache_write: null }
+    throw Error(method)
+  } })
+  await f.controller.refresh()
+  const after = f.controller.records[0]
+  assert.deepEqual(after.tokens, before.tokens)
+  assert.equal(after.cost, before.cost)
+  f.controller.dispose()
+})
+
 test('reload deduplicates metadata-only records; a complete handoff is not a complete Goal', () => {
   const f = fixture(); noteGoalReceipt(f.storage, receipt(), 'pr', f.api); noteGoalReceipt(f.storage, receipt(), 'pr', f.api)
   assert.equal(f.controller.records.length, 1); assert.equal(f.controller.records[0].status, 'unknown')

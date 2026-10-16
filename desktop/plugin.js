@@ -554,6 +554,10 @@ function startQueueGoal(api, plan, { storage, onState, kind, guard = async () =>
       if (completed) { onState(completed); return completed }
     }
     if (!state || state.fingerprint !== fingerprint) state = { version: 1, fingerprint, plan, stage: 'prepared', idempotencyKey: `githermes-queue-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
+    // Capture ownership before defining/invoking save: every persisted receipt
+    // update passes this immutable gateway/profile context to telemetry.
+    const gateway = api.getGateway?.()
+    const metricsOwner = { gateway, connection: api.state?.connectionId?.get?.() || 'local', profile: api.state?.profile?.get?.() || plan.profile }
     const save = update => {
       state = { ...state, ...update }; receipts.set(storage, state); onState(state); storage.set(receiptKey, state)
       noteGoalReceipt(storage, state, kind, api, metricsOwner)
@@ -563,8 +567,6 @@ function startQueueGoal(api, plan, { storage, onState, kind, guard = async () =>
       }
     }
     // Capture the actual gateway before opening a tab can change the active one.
-    const gateway = api.getGateway?.()
-    const metricsOwner = { gateway, connection: api.state?.connectionId?.get?.() || 'local', profile: api.state?.profile?.get?.() || plan.profile }
     const request = gateway?.request ? gateway.request.bind(gateway) : api.request.bind(api)
     if (state.stage === 'creating') throw new Error('Session-Erstellung hatte ein unbestätigtes Ergebnis. Kein automatischer Neustart: vorhandene Session in Hermes prüfen, um Duplikate zu vermeiden.')
     const execution = queueExecutionOptions(plan.execution)
@@ -5727,8 +5729,9 @@ export default {
     // Legacy receipts lack owning connection/gateway provenance. Do not guess
     // ownership or retroactively manufacture usage for pre-install Goals.
     void metrics.refresh()
-    if (typeof ctx.registerSettingsPage === 'function') ctx.registerSettingsPage({ id: 'goal-metrics', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
-    else ctx.register({ id: 'goal-metrics-settings', area: 'settings.plugins', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
+    // The SDK's registerSettingsPage contribution is the supported Settings API;
+    // generic contributions in settings.plugins are not a documented fallback.
+    ctx.registerSettingsPage?.({ id: 'goal-metrics', title: 'GitHermes', render: () => jsx(GoalMetricsSettings, {}) })
     ctx.register({ id: 'palette-goal-metrics', area: PALETTE_AREA, data: {
       id: 'githermes.goal-metrics', label: 'GitHub: Goal-Verbrauch', keywords: ['github', 'goal', 'tokens', 'cost', 'usage'],
       run: () => { $showGoalMetrics.set(true); openGithubPane() },
