@@ -27,6 +27,11 @@ test('cumulative snapshots replace, never sum; repeated ticks and counter reset 
   const reset = updateMetric(duplicate, { usage: { input: 12, output: 2 }, now: 102 })
   assert.equal(reset.tokens.input, 12)
   assert.equal(updateMetric(reset, { usage: { input: 0, output: 0 } }).tokens.input, null)
+  const known = updateMetric(duplicate, { usage: { input: 0, output: 2 }, now: 103 })
+  const nullSnapshot = updateMetric(known, { usage: { input: null, output: null, reasoning: null, cache_read: null, cache_write: null }, now: 104 })
+  assert.deepEqual(nullSnapshot.tokens, known.tokens)
+  assert.equal(nullSnapshot.cost, known.cost)
+  assert.equal(nullSnapshot.observedAt, known.observedAt)
 })
 test('native created_at is start; handoff complete is not done; observed done freezes final counters', () => {
   assert.equal(base().startedAt, null); assert.equal(base().endedAt, null)

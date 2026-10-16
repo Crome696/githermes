@@ -39,6 +39,7 @@ setMetricsController(controller);
 if (!controller.records.length) for (const [id, profile] of [['one','worker'],['two','zero']]) controller.track({stored_session_id:id,session_id:'rt-'+id,stage:'complete',plan:{profile,items:[{repo:'example/repo',number:id==='one'?12:13}],prompt:'PRIVATE PROMPT'},modelReadback:{model:'test-model',provider:'test',reasoning_effort:'high',fast:false}},'issue');
 await controller.refresh();
 window.fixtureDone = async () => { done=true; await controller.refresh() };
+window.updatePricesExternally = value => controller.setPrices(value);
 createRoot(document.getElementById('app')).render(React.createElement(React.Fragment, {}, React.createElement(GoalMetricsOverview, {}), React.createElement(GoalMetricsSettings, {})));
 `)
 const bundle = join(work, 'bundle.js')
@@ -73,6 +74,9 @@ try {
   await page.getByText('Preistabelle gespeichert.', {exact:true}).waitFor()
   assert.match(await page.locator('article').innerText(), /4\.000000 USD/)
   assert.match(await page.locator('article').innerText(), /geschätzt.*2026-10-15.*Teilsumme/)
+  const externalTable = {...table, rows: table.rows.map(row => ({...row, date:'2026-10-16'}))}
+  await page.evaluate(value => window.updatePricesExternally(value), externalTable)
+  await page.waitForFunction(() => document.querySelector('[aria-label="Preistabelle JSON"]').value.includes('2026-10-16'))
   for (const value of ['week','month','day']) { await page.getByLabel('Zeitraum', {exact:true}).selectOption(value); assert.equal(await page.locator('[data-metric-period]').count(),1) }
   await page.evaluate(() => window.fixtureDone())
   await page.getByText(/Ende \(beobachtet\):/).waitFor()
@@ -89,7 +93,7 @@ try {
   await page.setViewportSize({width:360,height:800})
   assert.equal(await page.locator('article').count(),1)
   assert.deepEqual(errors,[])
-  const report = {browser:chosen, assertions:'filters, unknown-zero usage, dated price save, partial estimate, day/week/month, observed done, CSV download, privacy, reload persistence, narrow viewport', csv:path, pageErrors:errors}
+  const report = {browser:chosen, assertions:'filters, unknown-zero usage, dated price save, external price-table draft resync, partial estimate, day/week/month, observed done, CSV download, privacy, reload persistence, narrow viewport', csv:path, pageErrors:errors}
   writeFileSync(join(work,'report.json'),JSON.stringify(report,null,2)); console.log(JSON.stringify(report,null,2))
   await context.close()
 } finally { await browser?.close(); server.close() }
