@@ -1,8 +1,8 @@
 # GitHermes
 
-[![CI](https://github.com/Crome696/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Crome696/githermes/actions/workflows/ci.yml)
+[![CI](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/CromeSDK-Plugins/githermes/actions/workflows/ci.yml)
 
-GitHermes **0.6.0** — [Crome696/githermes](https://github.com/Crome696/githermes).
+GitHermes **0.6.0** — [CromeSDK-Plugins/githermes](https://github.com/CromeSDK-Plugins/githermes).
 
 GitHub PRs & Issues as a right workspace pane in [Hermes Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/desktop).
 
@@ -422,7 +422,7 @@ an actual merge acceptance test. Those live/platform gates remain as listed belo
 ## Install
 
 ```bash
-hermes plugins install Crome696/githermes --enable
+hermes plugins install CromeSDK-Plugins/githermes --enable
 ```
 
 Or manually: drop this folder into `~/.hermes/plugins/githermes/` (unified package — the desktop half lives at `desktop/plugin.js`), or copy `desktop/plugin.js` to `~/.hermes/desktop-plugins/githermes/plugin.js` (standalone disk door). The app hot-reloads on save.

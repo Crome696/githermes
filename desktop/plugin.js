@@ -2820,7 +2820,7 @@ function SessionPrStatus() {
 // so local rev-list would miscount), and the update button runs the same CLI
 // users would. Null when githermes is not an installed package (dev symlinks)
 // — those update through git itself.
-const PLUGIN_REPO = 'claudiumio/githermes'
+export const PLUGIN_REPO = 'CromeSDK-Plugins/githermes'
 function PluginUpdateStatus() {
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState('')

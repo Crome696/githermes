@@ -2,10 +2,28 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { atom, useValue, host, TITLEBAR_AREAS, STATUSBAR_AREAS } from '@hermes/plugin-sdk'
-import plugin, { getGitHubShellStore } from '../desktop/plugin.js'
+import plugin, { getGitHubShellStore, PLUGIN_REPO } from '../desktop/plugin.js'
 import { useState } from 'react'
 
 // Deterministic SDK adapters, not a Desktop/runtime installation test.
+test('plugin update checks target the CromeSDK-Plugins repository', () => {
+  assert.equal(PLUGIN_REPO, 'CromeSDK-Plugins/githermes')
+  assert.ok(PLUGIN_REPO.startsWith('CromeSDK-Plugins/'))
+
+  const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
+  const compareTargets = [...source.matchAll(/repos\/\$\{([^}]+)\}\/compare/g)]
+  assert.ok(compareTargets.length > 0, 'expected at least one dynamic compare target')
+  for (const [, target] of compareTargets) {
+    assert.equal(target, 'PLUGIN_REPO', 'every compare target must use PLUGIN_REPO')
+  }
+
+  const literalCompareTargets = [...source.matchAll(/repos\/([^/'"`\s$]+)\/([^/'"`\s$]+)\/compare\b/g)]
+  const literalGitHubUrls = [...source.matchAll(/https?:\/\/github\.com\/([^/'"`\s$]+)\/[^'"`\s]*/gi)]
+  for (const [, owner] of [...literalCompareTargets, ...literalGitHubUrls]) {
+    assert.equal(owner.toLowerCase(), 'cromesdk-plugins', `unexpected GitHub owner: ${owner}`)
+  }
+})
+
 test('v0.21.7 SDK adapter exposes the real titlebar and statusbar slots', () => {
   assert.deepEqual(TITLEBAR_AREAS, { left: 'titleBar.left', center: 'titleBar.center', right: 'titleBar.right' })
   assert.deepEqual(STATUSBAR_AREAS, { left: 'statusBar.left', right: 'statusBar.right' })
@@ -61,9 +79,12 @@ test('package identity and audited compatibility floor are synchronized', () => 
   assert.match(manifest, /requires_hermes: ">=0\.21\.7"/)
   assert.match(manifest, /manifest_version: 1/)
   assert.match(manifest, /author: Crome696/)
-  assert.match(manifest, /homepage: https:\/\/github.com\/Crome696\/githermes/)
-  assert.equal(pkg.repository.url, 'https://github.com/Crome696/githermes.git')
-  assert.match(readme, /hermes plugins install Crome696\/githermes --enable/)
+  assert.match(manifest, /homepage: https:\/\/github.com\/CromeSDK-Plugins\/githermes/)
+  assert.equal(pkg.repository.url, 'https://github.com/CromeSDK-Plugins/githermes.git')
+  assert.equal(pkg.homepage, 'https://github.com/CromeSDK-Plugins/githermes')
+  assert.equal(pkg.bugs.url, 'https://github.com/CromeSDK-Plugins/githermes/issues')
+  assert.doesNotMatch(manifest + JSON.stringify(pkg), /Crome696\/githermes/)
+  assert.match(readme, /hermes plugins install CromeSDK-Plugins\/githermes --enable/)
   assert.match(readme, /GitHermes \*\*0\.6\.0\*\*/)
   assert.equal(pkg.scripts.pretest, 'node scripts/bootstrap-stubs.mjs')
 })

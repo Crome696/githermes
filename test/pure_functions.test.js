@@ -106,8 +106,8 @@ test('Issue #12: parsePatch parses unified diff patch into structured row model'
 })
 
 test('parseRemote extracts owner/repo from various git remote URL shapes', () => {
-  assert.equal(parseRemote('https://github.com/claudioorjunior/githermes.git'), 'claudioorjunior/githermes')
-  assert.equal(parseRemote('git@github.com:claudioorjunior/githermes.git'), 'claudioorjunior/githermes')
+  assert.equal(parseRemote('https://github.com/example-owner/example-repo.git'), 'example-owner/example-repo')
+  assert.equal(parseRemote('git@github.com:example-owner/example-repo.git'), 'example-owner/example-repo')
   assert.equal(parseRemote('https://github.com/owner/repo'), 'owner/repo')
   assert.equal(parseRemote(''), null)
   assert.equal(parseRemote(null), null)
@@ -149,7 +149,7 @@ test('resolveTranscriptPr keeps the link when the lookup fails', async () => {
 })
 
 test('Issue #33: formatPrCheckoutCmd returns a runnable gh command', () => {
-  assert.equal(formatPrCheckoutCmd('claudioorjunior/githermes', 33), 'gh pr checkout 33 --repo claudioorjunior/githermes')
+  assert.equal(formatPrCheckoutCmd('example-owner/example-repo', 33), 'gh pr checkout 33 --repo example-owner/example-repo')
 })
 
 test('prStateKey resolves open, draft, merged, closed states', () => {
@@ -538,7 +538,7 @@ test('mdBlocks parses GFM markdown into structured AST blocks', () => {
 
 test('Issue #24: repoOk accepts owner/repo, rejects shell-hostile free text', () => {
   // Valid
-  assert.ok(repoOk('claudioorjunior/githermes'))
+  assert.ok(repoOk('example-owner/example-repo'))
   assert.ok(repoOk('owner.name/repo_name'))
   assert.ok(repoOk('a-b.c_d/efg'))
   assert.ok(repoOk('owner/.'))
@@ -666,17 +666,17 @@ test('buildAssignPlan titles a scratch session, never Bot Chat', () => {
   const plan = buildAssignPlan({
     bot: { name: 'dev' },
     kind: 'pr',
-    repo: 'claudioorjunior/githermes',
+    repo: 'example-owner/example-repo',
     number: 34,
-    url: 'https://github.com/claudioorjunior/githermes/pull/34',
+    url: 'https://github.com/example-owner/example-repo/pull/34',
     title: 'tier polling',
   })
   assert.equal(plan.error, undefined)
   assert.equal(plan.profile, 'dev')
-  assert.equal(plan.title, 'PR claudioorjunior/githermes#34')
+  assert.equal(plan.title, 'PR example-owner/example-repo#34')
   assert.notEqual(plan.title, 'Bot Chat')
   assert.notEqual(plan.title, 'Agent Inbox')
-  assert.match(plan.prompt, /https:\/\/github.com\/claudioorjunior\/githermes\/pull\/34/)
+  assert.match(plan.prompt, /https:\/\/github.com\/example-owner\/example-repo\/pull\/34/)
   assert.match(plan.prompt, /diff|comments/i)
 })
 
