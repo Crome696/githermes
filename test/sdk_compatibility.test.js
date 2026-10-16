@@ -2,10 +2,14 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { atom, useValue, host, TITLEBAR_AREAS, STATUSBAR_AREAS } from '@hermes/plugin-sdk'
-import plugin, { getGitHubShellStore } from '../desktop/plugin.js'
+import plugin, { getGitHubShellStore, PLUGIN_REPO } from '../desktop/plugin.js'
 import { useState } from 'react'
 
 // Deterministic SDK adapters, not a Desktop/runtime installation test.
+test('plugin update checks target the CromeSDK-Plugins repository', () => {
+  assert.equal(PLUGIN_REPO, 'CromeSDK-Plugins/githermes')
+})
+
 test('v0.21.7 SDK adapter exposes the real titlebar and statusbar slots', () => {
   assert.deepEqual(TITLEBAR_AREAS, { left: 'titleBar.left', center: 'titleBar.center', right: 'titleBar.right' })
   assert.deepEqual(STATUSBAR_AREAS, { left: 'statusBar.left', right: 'statusBar.right' })
