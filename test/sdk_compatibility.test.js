@@ -8,6 +8,22 @@ import { useState } from 'react'
 // Deterministic SDK adapters, not a Desktop/runtime installation test.
 test('plugin update checks target the CromeSDK-Plugins repository', () => {
   assert.equal(PLUGIN_REPO, 'CromeSDK-Plugins/githermes')
+  assert.ok(PLUGIN_REPO.startsWith('CromeSDK-Plugins/'))
+
+  const source = readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
+  const compareTargets = [...source.matchAll(/repos\/\$\{([^}]+)\}\/compare/g)]
+  assert.ok(compareTargets.length > 0, 'expected at least one dynamic compare target')
+  for (const [, target] of compareTargets) {
+    assert.equal(target, 'PLUGIN_REPO', 'every compare target must use PLUGIN_REPO')
+  }
+
+  const repoLiterals = [
+    ...source.matchAll(/github\.com\/([^/'"\s]+)\/githermes/gi),
+    ...source.matchAll(/repos\/([^/'"\s]+)\/githermes/gi),
+  ]
+  for (const [, owner] of repoLiterals) {
+    assert.equal(owner.toLowerCase(), 'cromesdk-plugins', `unexpected githermes owner: ${owner}`)
+  }
 })
 
 test('v0.21.7 SDK adapter exposes the real titlebar and statusbar slots', () => {
